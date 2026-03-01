@@ -71,3 +71,35 @@ export async function updateSession(sessionId, updater) {
   await persist();
   return nextValue;
 }
+
+export async function deleteSession(sessionId) {
+  await ensureInitialized();
+  if (!db.sessions[sessionId]) {
+    return false;
+  }
+
+  delete db.sessions[sessionId];
+  await persist();
+  return true;
+}
+
+export async function deleteSessions(sessionIds) {
+  await ensureInitialized();
+  if (!Array.isArray(sessionIds) || sessionIds.length === 0) {
+    return 0;
+  }
+
+  let deletedCount = 0;
+  for (const sessionId of sessionIds) {
+    if (db.sessions[sessionId]) {
+      delete db.sessions[sessionId];
+      deletedCount += 1;
+    }
+  }
+
+  if (deletedCount > 0) {
+    await persist();
+  }
+
+  return deletedCount;
+}

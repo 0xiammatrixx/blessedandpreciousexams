@@ -3,17 +3,69 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   adminLogin,
   createAdminQuestion,
+  deleteAdminSession,
+  deleteAdminSessions,
   downloadAdminExport,
   fetchAdminOverview,
   fetchAdminQuestions,
   fetchAdminSessions,
   fetchMeta,
+  purgeAdminSessions,
 } from './api';
 
 const ADMIN_TOKEN_KEY = 'salem_admin_token';
 const ADMIN_TOKEN_EXPIRES_KEY = 'salem_admin_token_expires_at';
+const ADMIN_WIDGETS_KEY = 'salem_admin_widgets';
 
 const TOPIC_OPTIONS = ['basics', 'internet', 'web', 'coding', 'navigation', 'vscode', 'general'];
+
+const DEFAULT_WIDGETS = {
+  summaryCards: true,
+  scoreDistribution: true,
+  violationTypes: true,
+  classPerformance: true,
+  recentSubmissions: true,
+  exportCenter: true,
+  candidateSessions: true,
+  questionManager: true,
+};
+
+const ANALYTICS_WIDGET_KEYS = [
+  'summaryCards',
+  'scoreDistribution',
+  'violationTypes',
+  'classPerformance',
+  'recentSubmissions',
+];
+
+const CORE_WIDGET_PRESET = {
+  summaryCards: true,
+  scoreDistribution: true,
+  violationTypes: false,
+  classPerformance: true,
+  recentSubmissions: true,
+  exportCenter: true,
+  candidateSessions: true,
+  questionManager: false,
+};
+
+const WIDGET_LABELS = {
+  summaryCards: 'Summary cards',
+  scoreDistribution: 'Score distribution',
+  violationTypes: 'Violation types',
+  classPerformance: 'Class performance',
+  recentSubmissions: 'Recent submissions',
+  exportCenter: 'Export center',
+  candidateSessions: 'Candidate sessions',
+  questionManager: 'Question manager',
+};
+
+const PURGE_LABELS = {
+  submitted: 'submitted sessions',
+  active: 'active sessions',
+  time_up: 'timed-out sessions',
+  all: 'all sessions',
+};
 
 const EMPTY_QUESTION_FORM = {
   topic: 'general',
@@ -49,11 +101,31 @@ function percentBarValue(value, max) {
   return Math.max(4, Math.round((value / max) * 100));
 }
 
+function loadStoredWidgets() {
+  if (typeof window === 'undefined') {
+    return { ...DEFAULT_WIDGETS };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(ADMIN_WIDGETS_KEY);
+    if (!raw) {
+      return { ...DEFAULT_WIDGETS };
+    }
+
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_WIDGETS, ...parsed };
+  } catch {
+    return { ...DEFAULT_WIDGETS };
+  }
+}
+
 function AdminPage() {
   const [meta, setMeta] = useState(null);
   const [token, setToken] = useState('');
   const [tokenExpiresAt, setTokenExpiresAt] = useState(0);
   const [passcode, setPasscode] = useState('');
+  const [widgets, setWidgets] = useState(loadStoredWidgets);
+  const [selectedSessionIds, setSelectedSessionIds] = useState([]);
 
   const [overview, setOverview] = useState(null);
   const [sessions, setSessions] = useState([]);
@@ -69,6 +141,7 @@ function AdminPage() {
     sessions: false,
     questions: false,
     addQuestion: false,
+    deleting: false,
   });
 
   const [errorMessage, setErrorMessage] = useState('');
@@ -85,6 +158,7 @@ function AdminPage() {
     setTokenExpiresAt(0);
     setOverview(null);
     setSessions([]);
+    setSelectedSessionIds([]);
     setQuestions([]);
   }, []);
 
@@ -218,6 +292,24 @@ function AdminPage() {
     return () => clearTimeout(timeoutId);
   }, [infoMessage]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(ADMIN_WIDGETS_KEY, JSON.stringify(widgets));
+    } catch {
+      // ignore storage write errors
+    }
+  }, [widgets]);
+
+  useEffect(() => {
+    if (!sessions.length) {
+      setSelectedSessionIds([]);
+      return;
+    }
+
+    const validIds = new Set(sessions.map((session) => session.id));
+    setSelectedSessionIds((previous) => previous.filter((id) => validIds.has(id)));
+  }, [sessions]);
+
   const handleLogin = async (event) => {
     event.preventDefault();
 
@@ -321,6 +413,200 @@ function AdminPage() {
     }
   };
 
+  const refreshOverviewAndSessions = useCallback(
+    async (activeToken) => {
+      if (!activeToken) {
+        return;
+      }
+
+      await Promise.all([loadOverview(activeToken), loadSessions(activeToken, filters)]);
+    },
+    [filters, loadOverview, loadSessions]
+  );
+
+  const handleToggleWidget = useCallback((widgetKey) => {
+    setWidgets((previous) => ({
+      ...previous,
+      [widgetKey]: !previous[widgetKey],
+    }));
+  }, []);
+
+  const handleWidgetPreset = useCallback((preset) => {
+    if (preset === 'all') {
+      setWidgets({ ...DEFAULT_WIDGETS });
+      return;
+    }
+
+    if (preset === 'core') {
+      setWidgets({ ...CORE_WIDGET_PRESET });
+      return;
+    }
+
+    if (preset === 'analytics-all') {
+      setWidgets((previous) => {
+        const next = { ...previous };
+        for (const key of ANALYTICS_WIDGET_KEYS) {
+          next[key] = true;
+        }
+        return next;
+      });
+      return;
+    }
+
+    if (preset === 'analytics-relevant') {
+      setWidgets((previous) => ({
+        ...previous,
+        summaryCards: true,
+        scoreDistribution: true,
+        violationTypes: false,
+        classPerformance: true,
+        recentSubmissions: true,
+      }));
+    }
+  }, []);
+
+  const visibleSessionIds = useMemo(() => sessions.map((session) => session.id), [sessions]);
+  const visibleSessionIdSet = useMemo(() => new Set(visibleSessionIds), [visibleSessionIds]);
+  const selectedVisibleCount = useMemo(
+    () => selectedSessionIds.filter((id) => visibleSessionIdSet.has(id)).length,
+    [selectedSessionIds, visibleSessionIdSet]
+  );
+  const allVisibleSelected = useMemo(
+    () => visibleSessionIds.length > 0 && selectedVisibleCount === visibleSessionIds.length,
+    [selectedVisibleCount, visibleSessionIds.length]
+  );
+
+  const handleToggleSessionSelection = useCallback((sessionId, checked) => {
+    setSelectedSessionIds((previous) => {
+      if (checked) {
+        if (previous.includes(sessionId)) {
+          return previous;
+        }
+
+        return [...previous, sessionId];
+      }
+
+      return previous.filter((id) => id !== sessionId);
+    });
+  }, []);
+
+  const handleToggleAllVisible = useCallback(
+    (checked) => {
+      setSelectedSessionIds((previous) => {
+        if (checked) {
+          return [...new Set([...previous, ...visibleSessionIds])];
+        }
+
+        const visibleIdSet = new Set(visibleSessionIds);
+        return previous.filter((id) => !visibleIdSet.has(id));
+      });
+    },
+    [visibleSessionIds]
+  );
+
+  const handleDeleteSingleSession = useCallback(
+    async (session) => {
+      if (!token || !session?.id) {
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `Delete session for ${session.studentName}? This action cannot be undone.`
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      setErrorMessage('');
+      updateLoading('deleting', true);
+
+      try {
+        await deleteAdminSession(token, session.id);
+        setSelectedSessionIds((previous) => previous.filter((id) => id !== session.id));
+        await refreshOverviewAndSessions(token);
+        setInfoMessage('Session deleted.');
+      } catch (error) {
+        if (!handleUnauthorized(error)) {
+          setErrorMessage(error.message || 'Could not delete session.');
+        }
+      } finally {
+        updateLoading('deleting', false);
+      }
+    },
+    [handleUnauthorized, refreshOverviewAndSessions, token, updateLoading]
+  );
+
+  const handleDeleteSelectedSessions = useCallback(async () => {
+    if (!token) {
+      return;
+    }
+
+    if (!selectedSessionIds.length) {
+      setErrorMessage('Select at least one session to delete.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${selectedSessionIds.length} selected session(s)? This action cannot be undone.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setErrorMessage('');
+    updateLoading('deleting', true);
+
+    try {
+      const payload = await deleteAdminSessions(token, selectedSessionIds);
+      setSelectedSessionIds([]);
+      await refreshOverviewAndSessions(token);
+      setInfoMessage(`${payload.deletedCount ?? 0} selected session(s) deleted.`);
+    } catch (error) {
+      if (!handleUnauthorized(error)) {
+        setErrorMessage(error.message || 'Could not delete selected sessions.');
+      }
+    } finally {
+      updateLoading('deleting', false);
+    }
+  }, [
+    handleUnauthorized,
+    refreshOverviewAndSessions,
+    selectedSessionIds,
+    token,
+    updateLoading,
+  ]);
+
+  const handlePurgeSessions = useCallback(
+    async (scope) => {
+      if (!token) {
+        return;
+      }
+
+      const label = PURGE_LABELS[scope] ?? 'sessions';
+      const confirmed = window.confirm(`Purge ${label}? This action cannot be undone.`);
+      if (!confirmed) {
+        return;
+      }
+
+      setErrorMessage('');
+      updateLoading('deleting', true);
+
+      try {
+        const payload = await purgeAdminSessions(token, scope);
+        setSelectedSessionIds([]);
+        await refreshOverviewAndSessions(token);
+        setInfoMessage(`Purge complete: ${payload.deletedCount ?? 0} session(s) removed.`);
+      } catch (error) {
+        if (!handleUnauthorized(error)) {
+          setErrorMessage(error.message || 'Could not purge sessions.');
+        }
+      } finally {
+        updateLoading('deleting', false);
+      }
+    },
+    [handleUnauthorized, refreshOverviewAndSessions, token, updateLoading]
+  );
+
   const scoreDistribution = useMemo(
     () => overview?.scoreDistribution ?? [],
     [overview?.scoreDistribution]
@@ -338,6 +624,12 @@ function AdminPage() {
     () => Math.max(1, ...violationBreakdown.map((item) => item.count)),
     [violationBreakdown]
   );
+  const visibleAnalyticsCount = useMemo(
+    () => ANALYTICS_WIDGET_KEYS.filter((key) => widgets[key]).length,
+    [widgets]
+  );
+  const showScoreAndViolation = widgets.scoreDistribution || widgets.violationTypes;
+  const showClassAndRecent = widgets.classPerformance || widgets.recentSubmissions;
 
   if (!token) {
     return (
@@ -403,6 +695,48 @@ function AdminPage() {
         </div>
       </header>
 
+      <section className="card-panel wide admin-card">
+        <div className="panel-title-row">
+          <h2>Dashboard Widget Controls</h2>
+          <span className="muted">
+            Visible analytics widgets: {visibleAnalyticsCount}/{ANALYTICS_WIDGET_KEYS.length}
+          </span>
+        </div>
+
+        <div className="inline-actions">
+          <button type="button" className="btn btn-outline" onClick={() => handleWidgetPreset('analytics-all')}>
+            Show All Analytics
+          </button>
+          <button
+            type="button"
+            className="btn btn-outline"
+            onClick={() => handleWidgetPreset('analytics-relevant')}
+          >
+            Relevant Analytics
+          </button>
+          <button type="button" className="btn btn-outline" onClick={() => handleWidgetPreset('core')}>
+            Core View
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={() => handleWidgetPreset('all')}>
+            Reset Defaults
+          </button>
+        </div>
+
+        <div className="widget-grid">
+          {Object.entries(WIDGET_LABELS).map(([widgetKey, label]) => (
+            <label key={widgetKey} className={`widget-toggle ${widgets[widgetKey] ? 'on' : ''}`}>
+              <input
+                type="checkbox"
+                checked={Boolean(widgets[widgetKey])}
+                onChange={() => handleToggleWidget(widgetKey)}
+              />
+              <span>{label}</span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {widgets.summaryCards && (
       <section className="admin-cards-grid">
         <article className="result-box">
           <span>Total Candidates</span>
@@ -428,10 +762,21 @@ function AdminPage() {
           <span>Avg Violations</span>
           <strong>{overview?.totals?.averageViolations ?? 0}</strong>
         </article>
+        <article className="result-box">
+          <span>Feedback Count</span>
+          <strong>{overview?.totals?.feedbackCount ?? 0}</strong>
+        </article>
+        <article className="result-box">
+          <span>Average Rating</span>
+          <strong>{overview?.totals?.averageRating ?? 0}/5</strong>
+        </article>
       </section>
+      )}
 
-      <section className="admin-grid-2">
-        <article className="card-panel wide">
+      {showScoreAndViolation && (
+      <section className={`admin-grid-2 ${!widgets.scoreDistribution || !widgets.violationTypes ? 'single-column' : ''}`}>
+        {widgets.scoreDistribution && (
+        <article className="card-panel wide admin-card">
           <div className="panel-title-row">
             <h2>Score Distribution</h2>
             {loading.overview && <span className="muted">Loading...</span>}
@@ -452,8 +797,10 @@ function AdminPage() {
             ))}
           </div>
         </article>
+        )}
 
-        <article className="card-panel wide">
+        {widgets.violationTypes && (
+        <article className="card-panel wide admin-card">
           <div className="panel-title-row">
             <h2>Violation Types</h2>
             {loading.overview && <span className="muted">Loading...</span>}
@@ -475,15 +822,19 @@ function AdminPage() {
             ))}
           </div>
         </article>
+        )}
       </section>
+      )}
 
-      <section className="admin-grid-2">
-        <article className="card-panel wide">
+      {showClassAndRecent && (
+      <section className={`admin-grid-2 ${!widgets.classPerformance || !widgets.recentSubmissions ? 'single-column' : ''}`}>
+        {widgets.classPerformance && (
+        <article className="card-panel wide admin-card">
           <div className="panel-title-row">
             <h2>Class Performance</h2>
           </div>
 
-          <div className="table-wrap">
+          <div className="table-wrap medium">
             <table>
               <thead>
                 <tr>
@@ -511,13 +862,15 @@ function AdminPage() {
             </table>
           </div>
         </article>
+        )}
 
-        <article className="card-panel wide">
+        {widgets.recentSubmissions && (
+        <article className="card-panel wide admin-card">
           <div className="panel-title-row">
             <h2>Recent Submissions</h2>
           </div>
 
-          <div className="table-wrap">
+          <div className="table-wrap medium">
             <table>
               <thead>
                 <tr>
@@ -525,31 +878,40 @@ function AdminPage() {
                   <th>Class</th>
                   <th>Final</th>
                   <th>Violations</th>
+                  <th>Rating</th>
                   <th>Submitted</th>
                 </tr>
               </thead>
               <tbody>
                 {(overview?.recentSubmissions ?? []).map((item) => (
                   <tr key={item.id}>
-                    <td>{item.studentName}</td>
-                    <td>{item.classRoom}</td>
+                    <td title={item.studentName}>
+                      <span className="truncate-line">{item.studentName}</span>
+                    </td>
+                    <td title={item.classRoom}>
+                      <span className="truncate-line">{item.classRoom}</span>
+                    </td>
                     <td>{item.finalPercent}%</td>
                     <td>{item.violationsCount}</td>
+                    <td>{item.feedbackRating ?? '-'}</td>
                     <td>{formatDate(item.submittedAt)}</td>
                   </tr>
                 ))}
                 {!overview?.recentSubmissions?.length && (
                   <tr>
-                    <td colSpan={5}>No submissions yet.</td>
+                    <td colSpan={6}>No submissions yet.</td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
         </article>
+        )}
       </section>
+      )}
 
-      <section className="card-panel wide">
+      {widgets.exportCenter && (
+      <section className="card-panel wide admin-card">
         <div className="panel-title-row">
           <h2>Export Center</h2>
         </div>
@@ -592,16 +954,73 @@ function AdminPage() {
           </button>
         </div>
       </section>
+      )}
 
-      <section className="card-panel wide">
+      {widgets.candidateSessions && (
+      <section className="card-panel wide admin-card">
         <div className="panel-title-row">
           <h2>Candidate Sessions</h2>
+          <span className="muted">{sessions.length} row(s)</span>
+        </div>
+
+        <div className="admin-action-row">
+          <p className="muted">Selected: {selectedSessionIds.length}</p>
+          <div className="inline-actions admin-action-buttons">
+            <button
+              type="button"
+              className="btn btn-danger"
+              disabled={loading.deleting || selectedSessionIds.length === 0}
+              onClick={handleDeleteSelectedSessions}
+            >
+              {loading.deleting ? 'Working...' : 'Delete Selected'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline"
+              disabled={selectedSessionIds.length === 0 || loading.deleting}
+              onClick={() => setSelectedSessionIds([])}
+            >
+              Clear Selection
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline"
+              disabled={loading.deleting}
+              onClick={() => handlePurgeSessions('submitted')}
+            >
+              Purge Submitted
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline"
+              disabled={loading.deleting}
+              onClick={() => handlePurgeSessions('time_up')}
+            >
+              Purge Timed-out
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline"
+              disabled={loading.deleting}
+              onClick={() => handlePurgeSessions('active')}
+            >
+              Purge Active
+            </button>
+            <button
+              type="button"
+              className="btn btn-warning"
+              disabled={loading.deleting}
+              onClick={() => handlePurgeSessions('all')}
+            >
+              Purge All
+            </button>
+          </div>
         </div>
 
         <div className="admin-filters">
           <input
             type="search"
-            placeholder="Search by name or session ID"
+            placeholder="Search by name, email or session ID"
             value={filters.search}
             onChange={(event) =>
               setFilters((previous) => ({ ...previous, search: event.target.value }))
@@ -629,13 +1048,22 @@ function AdminPage() {
             <option value="">All status</option>
             <option value="submitted">Submitted</option>
             <option value="active">Active</option>
+            <option value="time_up">Time Up</option>
           </select>
         </div>
 
-        <div className="table-wrap">
-          <table>
+        <div className="table-wrap large">
+          <table className="sessions-table">
             <thead>
               <tr>
+                <th className="cell-tight">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={(event) => handleToggleAllVisible(event.target.checked)}
+                    aria-label="Select all visible sessions"
+                  />
+                </th>
                 <th>Session ID</th>
                 <th>Name</th>
                 <th>Class</th>
@@ -643,38 +1071,79 @@ function AdminPage() {
                 <th>Status</th>
                 <th>Final %</th>
                 <th>Violations</th>
+                <th>Rating</th>
+                <th>Feedback</th>
                 <th>Started</th>
                 <th>Submitted</th>
+                <th className="cell-tight">Action</th>
               </tr>
             </thead>
             <tbody>
               {sessions.map((session) => (
                 <tr key={session.id}>
-                  <td className="mono">{session.id.slice(0, 8)}...</td>
-                  <td>{session.studentName}</td>
-                  <td>{session.classRoom}</td>
-                  <td>{session.email || '-'}</td>
+                  <td className="cell-tight">
+                    <input
+                      type="checkbox"
+                      checked={selectedSessionIds.includes(session.id)}
+                      onChange={(event) =>
+                        handleToggleSessionSelection(session.id, event.target.checked)
+                      }
+                      aria-label={`Select session ${session.id}`}
+                    />
+                  </td>
+                  <td className="mono" title={session.id}>
+                    <span className="truncate-line">{session.id}</span>
+                  </td>
+                  <td title={session.studentName}>
+                    <span className="truncate-line">{session.studentName}</span>
+                  </td>
+                  <td title={session.classRoom}>
+                    <span className="truncate-line">{session.classRoom}</span>
+                  </td>
+                  <td title={session.email || '-'}>
+                    <span className="truncate-line">{session.email || '-'}</span>
+                  </td>
                   <td>
                     <span className={`status-pill ${session.status}`}>{session.status}</span>
                   </td>
                   <td>{session.finalPercent}%</td>
                   <td>{session.violationsCount}</td>
+                  <td>{session.feedbackRating ?? '-'}</td>
+                  <td title={session.feedbackComment || '-'}>
+                    <span className="truncate-line">{session.feedbackComment || '-'}</span>
+                  </td>
                   <td>{formatDate(session.startedAt)}</td>
                   <td>{formatDate(session.submittedAt)}</td>
+                  <td className="cell-tight">
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-xs"
+                      disabled={loading.deleting}
+                      onClick={() => handleDeleteSingleSession(session)}
+                    >
+                      Delete
+                    </button>
+                  </td>
                 </tr>
               ))}
               {!sessions.length && (
                 <tr>
-                  <td colSpan={9}>{loading.sessions ? 'Loading sessions...' : 'No sessions found.'}</td>
+                  <td colSpan={13}>
+                    {loading.sessions ? 'Loading sessions...' : 'No sessions found for this filter.'}
+                  </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
-      </section>
 
+        <p className="muted">Selected on screen: {selectedVisibleCount}</p>
+      </section>
+      )}
+
+      {widgets.questionManager && (
       <section className="admin-grid-2">
-        <article className="card-panel wide">
+        <article className="card-panel wide admin-card">
           <div className="panel-title-row">
             <h2>Add Question to Pool</h2>
             <span className="muted">Current pool: {questions.length}</span>
@@ -806,7 +1275,7 @@ function AdminPage() {
           </form>
         </article>
 
-        <article className="card-panel wide">
+        <article className="card-panel wide admin-card">
           <div className="panel-title-row">
             <h2>Question Pool</h2>
             {loading.questions && <span className="muted">Loading...</span>}
@@ -826,10 +1295,18 @@ function AdminPage() {
               <tbody>
                 {questions.map((question) => (
                   <tr key={question.id}>
-                    <td className="mono">{question.id}</td>
-                    <td>{question.topic}</td>
-                    <td>{question.type}</td>
-                    <td>{question.text}</td>
+                    <td className="mono" title={question.id}>
+                      <span className="truncate-line">{question.id}</span>
+                    </td>
+                    <td title={question.topic}>
+                      <span className="truncate-line">{question.topic}</span>
+                    </td>
+                    <td title={question.type}>
+                      <span className="truncate-line">{question.type}</span>
+                    </td>
+                    <td title={question.text}>
+                      <span className="truncate-2">{question.text}</span>
+                    </td>
                     <td>{question.answerKey}</td>
                   </tr>
                 ))}
@@ -843,6 +1320,7 @@ function AdminPage() {
           </div>
         </article>
       </section>
+      )}
     </main>
   );
 }

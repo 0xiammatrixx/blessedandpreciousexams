@@ -7,13 +7,27 @@ import path from 'node:path';
 
 import { CLASS_OPTIONS, EXAM_DURATION_SECONDS, EXAM_QUESTION_COUNT } from './questions.js';
 import { addQuestion, getQuestionByIdMap, getQuestionPool } from './questionStore.js';
-import { getSession, listSessions, saveSession, updateSession } from './store.js';
+import {
+  deleteSession,
+  deleteSessions,
+  getSession,
+  listSessions,
+  saveSession,
+  updateSession,
+} from './store.js';
 
 const PORT = Number(process.env.PORT ?? 4000);
 const PENALTY_PER_VIOLATION = 2;
 const ADMIN_PASSCODE_HASH = process.env.ADMIN_PASSCODE_HASH ?? '';
 const ADMIN_TOKEN_LIFETIME_MS = 12 * 60 * 60 * 1000;
 const OPTION_IDS = ['A', 'B', 'C', 'D'];
+const KEEP_ALIVE_ENABLED = String(process.env.KEEP_ALIVE_ENABLED ?? 'true').toLowerCase() === 'true';
+const KEEP_ALIVE_URL = String(process.env.KEEP_ALIVE_URL ?? '').trim();
+const KEEP_ALIVE_INTERVAL_MS_INPUT = Number(process.env.KEEP_ALIVE_INTERVAL_MS ?? 5 * 60 * 1000);
+const KEEP_ALIVE_INTERVAL_MS =
+  Number.isFinite(KEEP_ALIVE_INTERVAL_MS_INPUT) && KEEP_ALIVE_INTERVAL_MS_INPUT >= 60_000
+    ? KEEP_ALIVE_INTERVAL_MS_INPUT
+    : 5 * 60 * 1000;
 
 const adminTokens = new Map();
 
@@ -686,6 +700,53 @@ function questionToAdminRow(question) {
   };
 }
 
+function getKeepAliveTarget() {
+  if (KEEP_ALIVE_URL) {
+    return KEEP_ALIVE_URL;
+  }
+
+  return `http://127.0.0.1:${PORT}/api/keep-alive`;
+}
+
+function startKeepAliveLoop() {
+  if (!KEEP_ALIVE_ENABLED) {
+    return;
+  }
+
+  const target = getKeepAliveTarget();
+  const ping = async () => {
+    try {
+      const response = await fetch(target, {
+        method: 'GET',
+        headers: {
+          'Cache-Control': 'no-cache',
+          'User-Agent': 'salemexams-keepalive/1.0',
+        },
+      });
+
+      if (!response.ok) {
+        console.warn(`Keep-alive ping failed with status ${response.status}: ${target}`);
+      }
+    } catch (error) {
+      console.warn(`Keep-alive ping error: ${error.message}`);
+    }
+  };
+
+  const interval = setInterval(() => {
+    void ping();
+  }, KEEP_ALIVE_INTERVAL_MS);
+
+  // Allow the process to exit naturally in environments that support unref.
+  if (typeof interval.unref === 'function') {
+    interval.unref();
+  }
+
+  // Initial ping shortly after startup.
+  setTimeout(() => {
+    void ping();
+  }, 3_000);
+}
+
 const app = express();
 
 app.use(
@@ -698,6 +759,14 @@ app.use(express.json({ limit: '100kb' }));
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, timestamp: new Date().toISOString() });
+});
+
+app.get('/api/keep-alive', (_req, res) => {
+  res.json({
+    ok: true,
+    route: 'keep-alive',
+    timestamp: new Date().toISOString(),
+  });
 });
 
 app.get('/api/exam/meta', async (_req, res) => {
@@ -1049,6 +1118,58 @@ app.get('/api/admin/sessions/:sessionId', requireAdmin, async (req, res) => {
   });
 });
 
+app.delete('/api/admin/sessions/:sessionId', requireAdmin, async (req, res) => {
+  const removed = await deleteSession(req.params.sessionId);
+  if (!removed) {
+    res.status(404).json({ error: 'Session not found.' });
+    return;
+  }
+
+  res.json({ ok: true, deletedCount: 1 });
+});
+
+app.post('/api/admin/sessions/delete-selected', requireAdmin, async (req, res) => {
+  const sessionIds = Array.isArray(req.body?.sessionIds)
+    ? [...new Set(req.body.sessionIds.map((id) => normalizeName(id)).filter(Boolean))]
+    : [];
+
+  if (!sessionIds.length) {
+    res.status(400).json({ error: 'Select at least one session to delete.' });
+    return;
+  }
+
+  const deletedCount = await deleteSessions(sessionIds);
+  res.json({
+    ok: true,
+    deletedCount,
+  });
+});
+
+app.post('/api/admin/sessions/purge', requireAdmin, async (req, res) => {
+  const scope = normalizeName(req.body?.scope ?? '').toLowerCase();
+  if (!['all', 'submitted', 'active', 'time_up'].includes(scope)) {
+    res.status(400).json({ error: 'Purge scope must be one of: all, submitted, active, time_up.' });
+    return;
+  }
+
+  const sessions = await getLatestSessions();
+  const targetIds = sessions
+    .filter((session) => {
+      if (scope === 'all') {
+        return true;
+      }
+      return sessionStatus(session) === scope;
+    })
+    .map((session) => session.id);
+
+  const deletedCount = await deleteSessions(targetIds);
+  res.json({
+    ok: true,
+    deletedCount,
+    scope,
+  });
+});
+
 app.get('/api/admin/questions', requireAdmin, async (_req, res) => {
   const questionPool = await getQuestionPool();
 
@@ -1194,4 +1315,5 @@ app.listen(PORT, () => {
   if (!parsedAdminPasscodeHash) {
     console.warn('ADMIN_PASSCODE_HASH is not configured. Admin login is disabled until it is set.');
   }
+  startKeepAliveLoop();
 });

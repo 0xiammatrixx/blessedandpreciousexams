@@ -76,6 +76,15 @@ ADMIN_PASSCODE_HASH=scrypt$16384$8$1$...$...
 
 If `ADMIN_PASSCODE_HASH` is missing, admin login is disabled.
 
+Keep-alive (Render free mode helper):
+
+```env
+KEEP_ALIVE_ENABLED=true
+KEEP_ALIVE_URL=https://your-backend.onrender.com/api/keep-alive
+```
+
+The server has both `GET /api/health` and `GET /api/keep-alive`, and will self-ping every 5 minutes.
+
 ## Production Build
 
 ```bash

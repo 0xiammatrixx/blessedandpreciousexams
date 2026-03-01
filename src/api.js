@@ -125,6 +125,29 @@ export function fetchAdminQuestions(token) {
   });
 }
 
+export function deleteAdminSession(token, sessionId) {
+  return apiRequest(`/api/admin/sessions/${sessionId}`, {
+    method: 'DELETE',
+    headers: withAdminHeaders(token),
+  });
+}
+
+export function deleteAdminSessions(token, sessionIds) {
+  return apiRequest('/api/admin/sessions/delete-selected', {
+    method: 'POST',
+    headers: withAdminHeaders(token),
+    body: JSON.stringify({ sessionIds }),
+  });
+}
+
+export function purgeAdminSessions(token, scope) {
+  return apiRequest('/api/admin/sessions/purge', {
+    method: 'POST',
+    headers: withAdminHeaders(token),
+    body: JSON.stringify({ scope }),
+  });
+}
+
 export function createAdminQuestion(token, payload) {
   return apiRequest('/api/admin/questions', {
     method: 'POST',

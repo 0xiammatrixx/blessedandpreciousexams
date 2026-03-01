@@ -378,6 +378,46 @@ body {
   border-color: #99e9c2;
 }
 
+.feedback-panel {
+  margin-top: 1rem;
+  padding: 0.9rem;
+  border: 1px solid #d3dde1;
+  border-radius: 12px;
+  background: #f8fcfd;
+}
+
+.feedback-panel h3 {
+  margin: 0;
+  color: var(--ink-900);
+  font-size: 1.03rem;
+}
+
+.feedback-grid {
+  margin-top: 0.6rem;
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: 0.7rem;
+  align-items: start;
+}
+
+.feedback-grid label {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--ink-700);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.feedback-grid select,
+.feedback-grid textarea {
+  width: 100%;
+  border: 1px solid #ccd9dd;
+  border-radius: 8px;
+  padding: 0.58rem;
+  background: #ffffff;
+  font: inherit;
+}
+
 .toast {
   position: fixed;
   top: 0.8rem;
@@ -459,6 +499,16 @@ body {
   gap: 1rem;
 }
 
+.admin-shell .card-panel.wide {
+  width: 100%;
+  min-width: 0;
+}
+
+.admin-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
 .admin-login-card {
   width: min(620px, 100%);
 }
@@ -491,13 +541,18 @@ body {
 .admin-cards-grid {
   display: grid;
   gap: 0.7rem;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .admin-grid-2 {
   display: grid;
   gap: 1rem;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+.admin-grid-2.single-column {
+  grid-template-columns: 1fr;
 }
 
 .panel-title-row {
@@ -518,6 +573,7 @@ body {
   overflow-x: auto;
   border: 1px solid #d3dde1;
   border-radius: 10px;
+  max-width: 100%;
 }
 
 .table-wrap.tall {
@@ -525,8 +581,19 @@ body {
   overflow-y: auto;
 }
 
+.table-wrap.medium {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.table-wrap.large {
+  max-height: 520px;
+  overflow-y: auto;
+}
+
 .table-wrap table {
   width: 100%;
+  min-width: 680px;
   border-collapse: collapse;
   background: #ffffff;
 }
@@ -548,6 +615,20 @@ body {
   position: sticky;
   top: 0;
   z-index: 1;
+}
+
+.sessions-table {
+  min-width: 1240px;
+}
+
+.cell-tight {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.btn-xs {
+  padding: 0.38rem 0.56rem;
+  font-size: 0.78rem;
 }
 
 .mono {
@@ -601,7 +682,7 @@ body {
 
 .chart-row {
   display: grid;
-  grid-template-columns: 74px 1fr 32px;
+  grid-template-columns: 88px minmax(0, 1fr) 32px;
   align-items: center;
   gap: 0.5rem;
 }
@@ -609,6 +690,9 @@ body {
 .chart-label {
   color: var(--ink-700);
   font-size: 0.8rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chart-track {
@@ -633,11 +717,79 @@ body {
   flex-wrap: wrap;
 }
 
+.widget-grid {
+  margin-top: 0.85rem;
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.widget-toggle {
+  border: 1px solid #d4dfe3;
+  border-radius: 10px;
+  padding: 0.55rem 0.65rem;
+  background: #f8fcfd;
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  color: var(--ink-700);
+  cursor: pointer;
+}
+
+.widget-toggle.on {
+  border-color: #66d9e8;
+  background: #e6fcff;
+  color: var(--ink-900);
+}
+
+.widget-toggle input {
+  margin: 0;
+}
+
+.admin-action-row {
+  margin-bottom: 0.72rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.admin-action-row .muted {
+  margin: 0.2rem 0;
+}
+
+.admin-action-buttons {
+  margin-top: 0;
+}
+
 .checkbox-row label {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
   font-size: 0.86rem;
+}
+
+.truncate-line {
+  display: block;
+  max-width: 230px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.truncate-2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+@media (max-width: 1100px) {
+  .admin-grid-2 {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 760px) {
@@ -657,17 +809,20 @@ body {
     width: 100%;
   }
 
-  .btn {
+  .exam-shell .inline-actions .btn,
+  .header-status .btn,
+  .tour-card .inline-actions .btn {
     flex: 1;
     min-width: 130px;
   }
 
-  .palette-panel {
-    min-height: 45vh;
+  .admin-shell .inline-actions .btn {
+    flex: 0 0 auto;
+    min-width: 0;
   }
 
-  .admin-grid-2 {
-    grid-template-columns: 1fr;
+  .palette-panel {
+    min-height: 45vh;
   }
 
   .admin-filters {
@@ -676,5 +831,42 @@ body {
 
   .admin-shell {
     padding: 0.7rem;
+  }
+
+  .panel-title-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .table-wrap table {
+    min-width: 700px;
+  }
+
+  .sessions-table {
+    min-width: 1000px;
+  }
+
+  .truncate-line {
+    max-width: 170px;
+  }
+
+  .widget-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-action-row {
+    flex-direction: column;
+  }
+
+  .feedback-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .question-area {
+    padding: 0.75rem;
+  }
+
+  .option-card {
+    padding: 0.58rem 0.65rem;
   }
 }
