@@ -98,6 +98,15 @@ const PURGE_LABELS = {
   all: 'all sessions',
 };
 
+const PAGE_SIZE = {
+  sessions: 20,
+  students: 15,
+  users: 12,
+  passwordHelp: 12,
+  questions: 25,
+  exams: 10,
+};
+
 const EMPTY_QUESTION_FORM = {
   topic: 'general',
   type: 'single',
@@ -177,6 +186,69 @@ function loadStoredWidgets() {
   }
 }
 
+function pageCount(totalItems, pageSize) {
+  if (!totalItems || totalItems <= 0) {
+    return 1;
+  }
+
+  return Math.max(1, Math.ceil(totalItems / pageSize));
+}
+
+function getPagedRows(rows, currentPage, size) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const totalPages = pageCount(safeRows.length, size);
+  const page = Math.min(Math.max(1, currentPage), totalPages);
+  const start = (page - 1) * size;
+  const end = start + size;
+
+  return {
+    page,
+    totalPages,
+    rows: safeRows.slice(start, end),
+    start: safeRows.length ? start + 1 : 0,
+    end: Math.min(end, safeRows.length),
+    total: safeRows.length,
+  };
+}
+
+function PaginationControls({
+  page,
+  totalPages,
+  start,
+  end,
+  total,
+  label,
+  onPrev,
+  onNext,
+}) {
+  return (
+    <div className="pagination-row">
+      <p className="muted">
+        {total > 0 ? `Showing ${start}-${end} of ${total} ${label}` : `No ${label}`}
+      </p>
+
+      {totalPages > 1 && (
+        <div className="pagination-controls">
+          <span className="pagination-chip">
+            Page {page} / {totalPages}
+          </span>
+          <button type="button" className="btn btn-outline btn-xs" onClick={onPrev} disabled={page <= 1}>
+            Prev
+          </button>
+          <button
+            type="button"
+            className="btn btn-outline btn-xs"
+            onClick={onNext}
+            disabled={page >= totalPages}
+          >
+            Next
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdminPage() {
   const [meta, setMeta] = useState(null);
   const [token, setToken] = useState('');
@@ -202,6 +274,14 @@ function AdminPage() {
   const [userFilters, setUserFilters] = useState({ search: '', classRoom: '', status: '' });
   const [helpFilters, setHelpFilters] = useState({ search: '', status: 'open' });
   const [userPasswordDrafts, setUserPasswordDrafts] = useState({});
+  const [pages, setPages] = useState({
+    sessions: 1,
+    students: 1,
+    users: 1,
+    passwordHelp: 1,
+    questions: 1,
+    exams: 1,
+  });
 
   const [questionForm, setQuestionForm] = useState(EMPTY_QUESTION_FORM);
   const [examForm, setExamForm] = useState(EMPTY_EXAM_FORM);
@@ -463,6 +543,7 @@ function AdminPage() {
     }
 
     void loadSessions(token, filters);
+    setPages((previous) => ({ ...previous, sessions: 1 }));
   }, [filters, loadSessions, token]);
 
   useEffect(() => {
@@ -471,6 +552,7 @@ function AdminPage() {
     }
 
     void loadStudents(token, studentFilters);
+    setPages((previous) => ({ ...previous, students: 1 }));
   }, [loadStudents, studentFilters, token]);
 
   useEffect(() => {
@@ -479,6 +561,7 @@ function AdminPage() {
     }
 
     void loadUsers(token, userFilters);
+    setPages((previous) => ({ ...previous, users: 1 }));
   }, [loadUsers, token, userFilters]);
 
   useEffect(() => {
@@ -487,6 +570,7 @@ function AdminPage() {
     }
 
     void loadPasswordHelp(token, helpFilters);
+    setPages((previous) => ({ ...previous, passwordHelp: 1 }));
   }, [helpFilters, loadPasswordHelp, token]);
 
   useEffect(() => {
@@ -518,6 +602,33 @@ function AdminPage() {
     const validIds = new Set(sessions.map((session) => session.id));
     setSelectedSessionIds((previous) => previous.filter((id) => validIds.has(id)));
   }, [sessions]);
+
+  useEffect(() => {
+    setPages((previous) => {
+      const next = {
+        ...previous,
+        sessions: Math.min(previous.sessions, pageCount(sessions.length, PAGE_SIZE.sessions)),
+        students: Math.min(previous.students, pageCount(students.length, PAGE_SIZE.students)),
+        users: Math.min(previous.users, pageCount(users.length, PAGE_SIZE.users)),
+        passwordHelp: Math.min(
+          previous.passwordHelp,
+          pageCount(passwordHelpRequests.length, PAGE_SIZE.passwordHelp)
+        ),
+        questions: Math.min(previous.questions, pageCount(questions.length, PAGE_SIZE.questions)),
+        exams: Math.min(previous.exams, pageCount(exams.length, PAGE_SIZE.exams)),
+      };
+
+      const unchanged =
+        next.sessions === previous.sessions &&
+        next.students === previous.students &&
+        next.users === previous.users &&
+        next.passwordHelp === previous.passwordHelp &&
+        next.questions === previous.questions &&
+        next.exams === previous.exams;
+
+      return unchanged ? previous : next;
+    });
+  }, [sessions.length, students.length, users.length, passwordHelpRequests.length, questions.length, exams.length]);
 
   useEffect(() => {
     const classOptions = meta?.classOptions ?? [];
@@ -969,7 +1080,49 @@ function AdminPage() {
     }
   }, []);
 
-  const visibleSessionIds = useMemo(() => sessions.map((session) => session.id), [sessions]);
+  const pagedSessions = useMemo(
+    () => getPagedRows(sessions, pages.sessions, PAGE_SIZE.sessions),
+    [pages.sessions, sessions]
+  );
+  const pagedStudents = useMemo(
+    () => getPagedRows(students, pages.students, PAGE_SIZE.students),
+    [pages.students, students]
+  );
+  const pagedUsers = useMemo(
+    () => getPagedRows(users, pages.users, PAGE_SIZE.users),
+    [pages.users, users]
+  );
+  const pagedPasswordHelp = useMemo(
+    () => getPagedRows(passwordHelpRequests, pages.passwordHelp, PAGE_SIZE.passwordHelp),
+    [pages.passwordHelp, passwordHelpRequests]
+  );
+  const pagedQuestions = useMemo(
+    () => getPagedRows(questions, pages.questions, PAGE_SIZE.questions),
+    [pages.questions, questions]
+  );
+  const pagedExams = useMemo(
+    () => getPagedRows(exams, pages.exams, PAGE_SIZE.exams),
+    [exams, pages.exams]
+  );
+
+  const handlePagePrevious = useCallback((key) => {
+    setPages((previous) => ({
+      ...previous,
+      [key]: Math.max(1, (previous[key] ?? 1) - 1),
+    }));
+  }, []);
+
+  const handlePageNext = useCallback((key, totalPages) => {
+    setPages((previous) => ({
+      ...previous,
+      [key]: Math.min(totalPages, (previous[key] ?? 1) + 1),
+    }));
+  }, []);
+
+  const visibleSessionIds = useMemo(
+    () => pagedSessions.rows.map((session) => session.id),
+    [pagedSessions.rows]
+  );
   const visibleSessionIdSet = useMemo(() => new Set(visibleSessionIds), [visibleSessionIds]);
   const selectedVisibleCount = useMemo(
     () => selectedSessionIds.filter((id) => visibleSessionIdSet.has(id)).length,
@@ -1062,9 +1215,21 @@ function AdminPage() {
 
     try {
       const payload = await deleteAdminSessions(token, selectedSessionIds);
-      setSelectedSessionIds([]);
+      const failedIds = Array.isArray(payload.failedIds) ? payload.failedIds : [];
+      setSelectedSessionIds(failedIds);
       await refreshOverviewAndSessions(token);
-      setInfoMessage(`${payload.deletedCount ?? 0} selected session(s) deleted.`);
+      const deletedCount = Number(payload.deletedCount ?? 0);
+      const requestedCount = Number(payload.requestedCount ?? selectedSessionIds.length);
+      if (failedIds.length > 0 || deletedCount < requestedCount) {
+        setInfoMessage(
+          `${deletedCount} selected session(s) deleted. ${Math.max(
+            failedIds.length,
+            requestedCount - deletedCount
+          )} could not be deleted.`
+        );
+      } else {
+        setInfoMessage(`${deletedCount} selected session(s) deleted.`);
+      }
     } catch (error) {
       if (!handleUnauthorized(error)) {
         setErrorMessage(error.message || 'Could not delete selected sessions.');
@@ -1845,7 +2010,7 @@ function AdminPage() {
               </tr>
             </thead>
             <tbody>
-              {sessions.map((session) => (
+              {pagedSessions.rows.map((session) => (
                 <tr key={session.id}>
                   <td className="cell-tight">
                     <input
@@ -1906,6 +2071,17 @@ function AdminPage() {
             </tbody>
           </table>
         </div>
+
+        <PaginationControls
+          page={pagedSessions.page}
+          totalPages={pagedSessions.totalPages}
+          start={pagedSessions.start}
+          end={pagedSessions.end}
+          total={pagedSessions.total}
+          label="sessions"
+          onPrev={() => handlePagePrevious('sessions')}
+          onNext={() => handlePageNext('sessions', pagedSessions.totalPages)}
+        />
 
         <p className="muted">Selected on screen: {selectedVisibleCount}</p>
       </section>
@@ -1973,7 +2149,7 @@ function AdminPage() {
               </tr>
             </thead>
             <tbody>
-              {students.map((student) => (
+              {pagedStudents.rows.map((student) => (
                 <tr key={student.studentKey}>
                   <td title={student.studentName}>
                     <span className="truncate-line">{student.studentName}</span>
@@ -2007,6 +2183,17 @@ function AdminPage() {
             </tbody>
           </table>
         </div>
+
+        <PaginationControls
+          page={pagedStudents.page}
+          totalPages={pagedStudents.totalPages}
+          start={pagedStudents.start}
+          end={pagedStudents.end}
+          total={pagedStudents.total}
+          label="students"
+          onPrev={() => handlePagePrevious('students')}
+          onNext={() => handlePageNext('students', pagedStudents.totalPages)}
+        />
       </section>
       )}
 
@@ -2071,7 +2258,7 @@ function AdminPage() {
               </tr>
             </thead>
             <tbody>
-              {users.map((user) => (
+              {pagedUsers.rows.map((user) => (
                 <tr key={user.id}>
                   <td title={user.fullName}>
                     <span className="truncate-line">{user.fullName}</span>
@@ -2148,6 +2335,17 @@ function AdminPage() {
             </tbody>
           </table>
         </div>
+
+        <PaginationControls
+          page={pagedUsers.page}
+          totalPages={pagedUsers.totalPages}
+          start={pagedUsers.start}
+          end={pagedUsers.end}
+          total={pagedUsers.total}
+          label="users"
+          onPrev={() => handlePagePrevious('users')}
+          onNext={() => handlePageNext('users', pagedUsers.totalPages)}
+        />
       </section>
       )}
 
@@ -2194,7 +2392,7 @@ function AdminPage() {
               </tr>
             </thead>
             <tbody>
-              {passwordHelpRequests.map((request) => (
+              {pagedPasswordHelp.rows.map((request) => (
                 <tr key={request.id}>
                   <td title={request.fullName}>
                     <span className="truncate-line">{request.fullName}</span>
@@ -2231,6 +2429,17 @@ function AdminPage() {
             </tbody>
           </table>
         </div>
+
+        <PaginationControls
+          page={pagedPasswordHelp.page}
+          totalPages={pagedPasswordHelp.totalPages}
+          start={pagedPasswordHelp.start}
+          end={pagedPasswordHelp.end}
+          total={pagedPasswordHelp.total}
+          label="requests"
+          onPrev={() => handlePagePrevious('passwordHelp')}
+          onNext={() => handlePageNext('passwordHelp', pagedPasswordHelp.totalPages)}
+        />
       </section>
       )}
 
@@ -2854,7 +3063,7 @@ function AdminPage() {
                 </tr>
               </thead>
               <tbody>
-                {exams.map((exam) => (
+                {pagedExams.rows.map((exam) => (
                   <tr key={exam.id}>
                     <td title={exam.title}>
                       <span className="truncate-line">{exam.title}</span>
@@ -2877,6 +3086,17 @@ function AdminPage() {
               </tbody>
             </table>
           </div>
+
+          <PaginationControls
+            page={pagedExams.page}
+            totalPages={pagedExams.totalPages}
+            start={pagedExams.start}
+            end={pagedExams.end}
+            total={pagedExams.total}
+            label="exams"
+            onPrev={() => handlePagePrevious('exams')}
+            onNext={() => handlePageNext('exams', pagedExams.totalPages)}
+          />
         </article>
       </section>
       )}
@@ -3034,7 +3254,7 @@ function AdminPage() {
                 </tr>
               </thead>
               <tbody>
-                {questions.map((question) => (
+                {pagedQuestions.rows.map((question) => (
                   <tr key={question.id}>
                     <td className="mono" title={question.id}>
                       <span className="truncate-line">{question.id}</span>
@@ -3062,6 +3282,17 @@ function AdminPage() {
               </tbody>
             </table>
           </div>
+
+          <PaginationControls
+            page={pagedQuestions.page}
+            totalPages={pagedQuestions.totalPages}
+            start={pagedQuestions.start}
+            end={pagedQuestions.end}
+            total={pagedQuestions.total}
+            label="questions"
+            onPrev={() => handlePagePrevious('questions')}
+            onNext={() => handlePageNext('questions', pagedQuestions.totalPages)}
+          />
         </article>
       </section>
       )}

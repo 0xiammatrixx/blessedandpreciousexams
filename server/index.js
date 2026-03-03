@@ -75,6 +75,28 @@ function normalizeName(value) {
   return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
 }
 
+function parseSessionIdsInput(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return [...new Set(value.map((id) => normalizeName(id)).filter(Boolean))];
+}
+
+function parseSessionIdsFromRequest(req) {
+  const fromBody = parseSessionIdsInput(req.body?.sessionIds);
+  if (fromBody.length > 0) {
+    return fromBody;
+  }
+
+  const queryValue = req.query?.sessionIds ?? req.query?.ids ?? '';
+  if (typeof queryValue !== 'string') {
+    return [];
+  }
+
+  return [...new Set(queryValue.split(',').map((id) => normalizeName(id)).filter(Boolean))];
+}
+
 function normalizeEmail(value) {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
@@ -2081,10 +2103,23 @@ app.delete('/api/admin/sessions/:sessionId', requireAdmin, async (req, res) => {
   res.json({ ok: true, deletedCount: 1 });
 });
 
+app.delete('/api/admin/sessions', requireAdmin, async (req, res) => {
+  const sessionIds = parseSessionIdsFromRequest(req);
+  if (!sessionIds.length) {
+    res.status(400).json({ error: 'Select at least one session to delete.' });
+    return;
+  }
+
+  const deletedCount = await deleteSessions(sessionIds);
+  res.json({
+    ok: true,
+    deletedCount,
+    requestedCount: sessionIds.length,
+  });
+});
+
 app.post('/api/admin/sessions/delete-selected', requireAdmin, async (req, res) => {
-  const sessionIds = Array.isArray(req.body?.sessionIds)
-    ? [...new Set(req.body.sessionIds.map((id) => normalizeName(id)).filter(Boolean))]
-    : [];
+  const sessionIds = parseSessionIdsFromRequest(req);
 
   if (!sessionIds.length) {
     res.status(400).json({ error: 'Select at least one session to delete.' });
@@ -2095,6 +2130,7 @@ app.post('/api/admin/sessions/delete-selected', requireAdmin, async (req, res) =
   res.json({
     ok: true,
     deletedCount,
+    requestedCount: sessionIds.length,
   });
 });
 

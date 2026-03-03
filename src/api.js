@@ -322,12 +322,57 @@ export function deleteAdminSession(token, sessionId) {
   });
 }
 
-export function deleteAdminSessions(token, sessionIds) {
-  return apiRequest('/api/admin/sessions/delete-selected', {
-    method: 'POST',
-    headers: withAdminHeaders(token),
-    body: JSON.stringify({ sessionIds }),
-  });
+export async function deleteAdminSessions(token, sessionIds) {
+  const uniqueIds = Array.isArray(sessionIds)
+    ? [...new Set(sessionIds.map((id) => String(id ?? '').trim()).filter(Boolean))]
+    : [];
+
+  if (!uniqueIds.length) {
+    const error = new Error('Select at least one session to delete.');
+    error.status = 400;
+    throw error;
+  }
+
+  try {
+    return await apiRequest('/api/admin/sessions', {
+      method: 'DELETE',
+      headers: withAdminHeaders(token),
+      body: JSON.stringify({ sessionIds: uniqueIds }),
+    });
+  } catch (error) {
+    if (![404, 405, 501].includes(error?.status)) {
+      throw error;
+    }
+  }
+
+  try {
+    return await apiRequest('/api/admin/sessions/delete-selected', {
+      method: 'POST',
+      headers: withAdminHeaders(token),
+      body: JSON.stringify({ sessionIds: uniqueIds }),
+    });
+  } catch (error) {
+    if (![404, 405, 501].includes(error?.status)) {
+      throw error;
+    }
+  }
+
+  const results = await Promise.allSettled(uniqueIds.map((sessionId) => deleteAdminSession(token, sessionId)));
+  const deletedCount = results.filter((item) => item.status === 'fulfilled').length;
+  const failedIds = results
+    .map((item, index) => (item.status === 'rejected' ? uniqueIds[index] : null))
+    .filter(Boolean);
+
+  if (deletedCount === 0) {
+    throw new Error('Could not delete selected sessions. Try individual delete or refresh.');
+  }
+
+  return {
+    ok: true,
+    deletedCount,
+    requestedCount: uniqueIds.length,
+    failedIds,
+  };
 }
 
 export function purgeAdminSessions(token, scope) {
