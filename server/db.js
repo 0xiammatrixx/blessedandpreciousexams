@@ -1,11 +1,31 @@
+import dns from 'node:dns';
 import { MongoClient } from 'mongodb';
 
 const MONGO_URI = String(process.env.MONGO_URI ?? '').trim();
 const MONGO_DB_NAME = String(process.env.MONGO_DB_NAME ?? 'salemexams').trim();
+const MONGO_DNS_SERVERS = String(process.env.MONGO_DNS_SERVERS ?? '').trim();
 
 let client = null;
 let db = null;
 let connectPromise = null;
+let dnsConfigured = false;
+
+function configureDnsServers() {
+  if (dnsConfigured) {
+    return;
+  }
+
+  const servers = MONGO_DNS_SERVERS
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (servers.length > 0) {
+    dns.setServers(servers);
+  }
+
+  dnsConfigured = true;
+}
 
 async function ensureConnected() {
   if (db) {
@@ -22,6 +42,8 @@ async function ensureConnected() {
   }
 
   connectPromise = (async () => {
+    configureDnsServers();
+
     client = new MongoClient(MONGO_URI, {
       maxPoolSize: 10,
       minPoolSize: 1,
