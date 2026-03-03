@@ -74,6 +74,14 @@ export function requestStudentPasswordHelp(payload) {
   });
 }
 
+export function saveStudentGeneralFeedback(token, payload) {
+  return apiRequest('/api/student/feedback', {
+    method: 'POST',
+    headers: withStudentHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
 export function fetchStudentTrials(token) {
   return apiRequest('/api/student/trials', {
     headers: withStudentHeaders(token),
@@ -84,6 +92,38 @@ export function fetchStudentTrial(token, sessionId) {
   return apiRequest(`/api/student/trials/${encodeURIComponent(sessionId)}`, {
     headers: withStudentHeaders(token),
   });
+}
+
+export async function downloadStudentTrialReportCard(token, sessionId, downloadName) {
+  const response = await fetch(
+    `${API_BASE}/api/student/trials/${encodeURIComponent(sessionId)}/report-card`,
+    {
+      headers: withStudentHeaders(token),
+    }
+  );
+
+  if (!response.ok) {
+    let message = `Request failed with status ${response.status}`;
+    try {
+      const payload = await response.json();
+      if (payload?.error) {
+        message = payload.error;
+      }
+    } catch {
+      // ignore parse errors
+    }
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = downloadName;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
 }
 
 export function startSession(token, data) {
@@ -160,6 +200,20 @@ export function fetchAdminOverview(token) {
   });
 }
 
+export function fetchAdminBrandingSettings(token) {
+  return apiRequest('/api/admin/settings/branding', {
+    headers: withAdminHeaders(token),
+  });
+}
+
+export function updateAdminBrandingSettings(token, payload) {
+  return apiRequest('/api/admin/settings/branding', {
+    method: 'PATCH',
+    headers: withAdminHeaders(token),
+    body: JSON.stringify(payload),
+  });
+}
+
 export function fetchAdminSessions(
   token,
   { search = '', classRoom = '', status = '', examId = '' } = {}
@@ -188,6 +242,38 @@ export function fetchAdminSession(token, sessionId) {
   return apiRequest(`/api/admin/sessions/${encodeURIComponent(sessionId)}`, {
     headers: withAdminHeaders(token),
   });
+}
+
+export async function downloadAdminSessionReportCard(token, sessionId, downloadName) {
+  const response = await fetch(
+    `${API_BASE}/api/admin/sessions/${encodeURIComponent(sessionId)}/report-card`,
+    {
+      headers: withAdminHeaders(token),
+    }
+  );
+
+  if (!response.ok) {
+    let message = `Request failed with status ${response.status}`;
+    try {
+      const payload = await response.json();
+      if (payload?.error) {
+        message = payload.error;
+      }
+    } catch {
+      // ignore parse errors
+    }
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = downloadName;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
 }
 
 export function waiveAdminSessionViolations(token, sessionId, payload) {

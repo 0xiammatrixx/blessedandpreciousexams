@@ -7,7 +7,9 @@ import {
   deleteAdminSession,
   deleteAdminSessions,
   downloadAdminExport,
+  downloadAdminSessionReportCard,
   fetchAdminExams,
+  fetchAdminBrandingSettings,
   fetchAdminPasswordHelp,
   fetchAdminStudentTrials,
   fetchAdminStudents,
@@ -20,6 +22,7 @@ import {
   resetAdminUserPassword,
   resolveAdminPasswordHelp,
   updateAdminUser,
+  updateAdminBrandingSettings,
   updateAdminExam,
   waiveAdminSessionViolations,
 } from './api';
@@ -146,6 +149,11 @@ const EMPTY_EXAM_QUESTION_FORM = {
   correctB: false,
   correctC: false,
   correctD: false,
+};
+
+const DEFAULT_BRANDING_FORM = {
+  schoolName: 'Salem Academy',
+  logoUrl: '',
 };
 
 function formatDate(value) {
@@ -297,6 +305,7 @@ function AdminPage() {
     deductRightClick: false,
     deductRestrictedKey: false,
   });
+  const [brandingForm, setBrandingForm] = useState(DEFAULT_BRANDING_FORM);
 
   const [loading, setLoading] = useState({
     login: false,
@@ -304,6 +313,7 @@ function AdminPage() {
     sessions: false,
     questions: false,
     exams: false,
+    branding: false,
     students: false,
     users: false,
     passwordHelp: false,
@@ -335,6 +345,7 @@ function AdminPage() {
     setPasswordHelpRequests([]);
     setUserPasswordDrafts({});
     setStudentTrials(null);
+    setBrandingForm(DEFAULT_BRANDING_FORM);
     setTrialReviewOpen(false);
     setTrialSelectedViolations({});
     setFilters({ search: '', classRoom: '', status: '', examId: '' });
@@ -439,6 +450,27 @@ function AdminPage() {
     [handleUnauthorized, updateLoading]
   );
 
+  const loadBranding = useCallback(
+    async (activeToken) => {
+      updateLoading('branding', true);
+      try {
+        const payload = await fetchAdminBrandingSettings(activeToken);
+        const nextBranding = payload?.branding ?? {};
+        setBrandingForm({
+          schoolName: nextBranding.schoolName ?? DEFAULT_BRANDING_FORM.schoolName,
+          logoUrl: nextBranding.logoUrl ?? DEFAULT_BRANDING_FORM.logoUrl,
+        });
+      } catch (error) {
+        if (!handleUnauthorized(error)) {
+          setErrorMessage(error.message || 'Could not load branding settings.');
+        }
+      } finally {
+        updateLoading('branding', false);
+      }
+    },
+    [handleUnauthorized, updateLoading]
+  );
+
   const loadStudents = useCallback(
     async (activeToken, activeFilters) => {
       updateLoading('students', true);
@@ -535,7 +567,8 @@ function AdminPage() {
     void loadOverview(token);
     void loadQuestions(token);
     void loadExams(token);
-  }, [loadExams, loadOverview, loadQuestions, token]);
+    void loadBranding(token);
+  }, [loadBranding, loadExams, loadOverview, loadQuestions, token]);
 
   useEffect(() => {
     if (!token) {
@@ -686,6 +719,7 @@ function AdminPage() {
       loadSessions(token, filters),
       loadQuestions(token),
       loadExams(token),
+      loadBranding(token),
       loadStudents(token, studentFilters),
       loadUsers(token, userFilters),
       loadPasswordHelp(token, helpFilters),
@@ -706,6 +740,51 @@ function AdminPage() {
     } catch (error) {
       if (!handleUnauthorized(error)) {
         setErrorMessage(error.message || 'Export failed.');
+      }
+    }
+  };
+
+  const handleSaveBranding = async (event) => {
+    event.preventDefault();
+    if (!token) {
+      return;
+    }
+
+    setErrorMessage('');
+    updateLoading('branding', true);
+
+    try {
+      const payload = await updateAdminBrandingSettings(token, {
+        schoolName: brandingForm.schoolName,
+        logoUrl: brandingForm.logoUrl,
+      });
+      const savedBranding = payload?.branding ?? {};
+      setBrandingForm({
+        schoolName: savedBranding.schoolName ?? DEFAULT_BRANDING_FORM.schoolName,
+        logoUrl: savedBranding.logoUrl ?? DEFAULT_BRANDING_FORM.logoUrl,
+      });
+      setInfoMessage('Branding settings saved.');
+    } catch (error) {
+      if (!handleUnauthorized(error)) {
+        setErrorMessage(error.message || 'Could not save branding settings.');
+      }
+    } finally {
+      updateLoading('branding', false);
+    }
+  };
+
+  const handleDownloadSessionReportCard = async (sessionId) => {
+    if (!token || !sessionId) {
+      return;
+    }
+
+    setErrorMessage('');
+    try {
+      await downloadAdminSessionReportCard(token, sessionId, `report-card-${sessionId}.html`);
+      setInfoMessage('Report card downloaded.');
+    } catch (error) {
+      if (!handleUnauthorized(error)) {
+        setErrorMessage(error.message || 'Could not download report card.');
       }
     }
   };
@@ -1466,6 +1545,7 @@ function AdminPage() {
   );
   const showScoreAndViolation = widgets.scoreDistribution || widgets.violationTypes;
   const showClassAndRecent = widgets.classPerformance || widgets.recentSubmissions;
+  const brandingLogoPreview = (brandingForm.logoUrl || '/favicon.svg').trim() || '/favicon.svg';
 
   if (!token) {
     return (
@@ -1572,6 +1652,67 @@ function AdminPage() {
         </div>
       </section>
 
+      <section className="card-panel wide admin-card">
+        <div className="panel-title-row">
+          <h2>Report Card Branding</h2>
+          <span className="muted">Used on student and admin report cards.</span>
+        </div>
+
+        <form className="form-stack" onSubmit={handleSaveBranding}>
+          <label htmlFor="brandingSchoolName">School Name</label>
+          <input
+            id="brandingSchoolName"
+            value={brandingForm.schoolName}
+            maxLength={120}
+            onChange={(event) =>
+              setBrandingForm((previous) => ({ ...previous, schoolName: event.target.value }))
+            }
+            placeholder="Salem Academy"
+          />
+
+          <label htmlFor="brandingLogoUrl">School Logo URL (Optional)</label>
+          <input
+            id="brandingLogoUrl"
+            value={brandingForm.logoUrl}
+            maxLength={500}
+            onChange={(event) =>
+              setBrandingForm((previous) => ({ ...previous, logoUrl: event.target.value }))
+            }
+            placeholder="https://example.com/logo.png"
+          />
+
+          <p className="muted">If empty, the default favicon will be used.</p>
+
+          <div className="branding-preview">
+            <img
+              src={brandingLogoPreview}
+              alt="Branding logo preview"
+              onError={(event) => {
+                event.currentTarget.src = '/favicon.svg';
+              }}
+            />
+            <div>
+              <strong>{brandingForm.schoolName || DEFAULT_BRANDING_FORM.schoolName}</strong>
+              <p className="muted">Live preview for report card header.</p>
+            </div>
+          </div>
+
+          <div className="inline-actions">
+            <button type="submit" className="btn btn-primary" disabled={loading.branding}>
+              {loading.branding ? 'Saving...' : 'Save Branding'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline"
+              disabled={loading.branding}
+              onClick={() => void loadBranding(token)}
+            >
+              Reload Branding
+            </button>
+          </div>
+        </form>
+      </section>
+
       {widgets.summaryCards && (
       <section className="admin-cards-grid">
         <article className="result-box">
@@ -1601,6 +1742,10 @@ function AdminPage() {
         <article className="result-box">
           <span>Feedback Count</span>
           <strong>{overview?.totals?.feedbackCount ?? 0}</strong>
+        </article>
+        <article className="result-box">
+          <span>General Feedback</span>
+          <strong>{overview?.totals?.generalFeedbackCount ?? 0}</strong>
         </article>
         <article className="result-box">
           <span>Average Rating</span>
@@ -2050,14 +2195,23 @@ function AdminPage() {
                   <td>{formatDate(session.startedAt)}</td>
                   <td>{formatDate(session.submittedAt)}</td>
                   <td className="cell-tight">
-                    <button
-                      type="button"
-                      className="btn btn-outline btn-xs"
-                      disabled={loading.deleting}
-                      onClick={() => handleDeleteSingleSession(session)}
-                    >
-                      Delete
-                    </button>
+                    <div className="inline-actions compact">
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-xs"
+                        onClick={() => void handleDownloadSessionReportCard(session.id)}
+                      >
+                        Report
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-xs"
+                        disabled={loading.deleting}
+                        onClick={() => handleDeleteSingleSession(session)}
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -2487,6 +2641,13 @@ function AdminPage() {
                   </div>
 
                   <div className="inline-actions compact">
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-xs"
+                      onClick={() => void handleDownloadSessionReportCard(trial.id)}
+                    >
+                      Report Card
+                    </button>
                     <button
                       type="button"
                       className="btn btn-outline btn-xs"

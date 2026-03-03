@@ -852,6 +852,32 @@ body {
   margin: 0;
 }
 
+.branding-preview {
+  border: 1px solid #d6e2e6;
+  border-radius: 12px;
+  background: #f9fcfd;
+  padding: 0.65rem;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.branding-preview img {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid #d6e2e6;
+  background: #ffffff;
+  padding: 0.2rem;
+}
+
+.branding-preview strong {
+  color: var(--ink-900);
+  display: block;
+  margin-bottom: 0.2rem;
+}
+
 .admin-action-row {
   margin-bottom: 0.72rem;
   display: flex;

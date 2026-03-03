@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   changeStudentPassword,
+  downloadStudentTrialReportCard,
   fetchMeta,
   fetchSession,
   fetchStudentMe,
@@ -13,6 +14,7 @@ import {
   saveAnswer,
   saveExamFeedback,
   saveFlag,
+  saveStudentGeneralFeedback,
   startSession,
   studentLogin,
   submitExam,
@@ -66,13 +68,13 @@ function formatDateTime(value) {
   }
 }
 
-function formatSelectedOptions(question, responses) {
-  const selectedOptionIds = responses?.[question?.id] ?? [];
-  if (!selectedOptionIds.length) {
+function formatOptionList(question, optionIds) {
+  const selected = Array.isArray(optionIds) ? optionIds : [];
+  if (!selected.length) {
     return 'No answer';
   }
 
-  return selectedOptionIds
+  return selected
     .map((optionId) => {
       const option = (question?.options ?? []).find((item) => item.id === optionId);
       return option ? `${optionId}. ${option.text}` : optionId;
@@ -114,16 +116,20 @@ function StudentExamApp() {
   const [isStarting, setIsStarting] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSavingFeedback, setIsSavingFeedback] = useState(false);
+  const [isSavingGeneralFeedback, setIsSavingGeneralFeedback] = useState(false);
   const [isSavingPassword, setIsSavingPassword] = useState(false);
   const [isSendingHelp, setIsSendingHelp] = useState(false);
   const [isReviewLoading, setIsReviewLoading] = useState(false);
+  const [submitConfirmArmed, setSubmitConfirmArmed] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(Boolean(document.fullscreenElement));
   const [feedbackForm, setFeedbackForm] = useState({ rating: '', comment: '' });
+  const [generalFeedbackForm, setGeneralFeedbackForm] = useState({ rating: '', comment: '' });
   const [resultReleaseNow, setResultReleaseNow] = useState(Date.now());
 
   const violationThrottleRef = useRef(new Map());
   const seenSyncBlockedRef = useRef(new Set());
   const autoSubmitTriggeredRef = useRef(false);
+  const submitInProgressRef = useRef(false);
 
   const clearStoredSession = useCallback(() => {
     localStorage.removeItem(ACTIVE_SESSION_KEY);
@@ -170,6 +176,8 @@ function StudentExamApp() {
       exams: payload.exams ?? [],
       activeSession: payload.activeSession ?? null,
       trials: payload.trials ?? [],
+      leaderboards: payload.leaderboards ?? { classRoom: '', overall: [], classTop: [], currentStudent: null },
+      generalFeedbackHistory: payload.generalFeedbackHistory ?? [],
     };
     setDashboard(nextDashboard);
     setSelectedExamId((prev) => {
@@ -373,6 +381,18 @@ function StudentExamApp() {
       : 0;
 
   useEffect(() => {
+    if (!submitConfirmArmed) {
+      return undefined;
+    }
+
+    const timeoutId = setTimeout(() => {
+      setSubmitConfirmArmed(false);
+    }, 6000);
+
+    return () => clearTimeout(timeoutId);
+  }, [submitConfirmArmed]);
+
+  useEffect(() => {
     if (!resultsLocked) {
       return undefined;
     }
@@ -422,11 +442,14 @@ function StudentExamApp() {
   const handleSubmit = useCallback(
     async (trigger = 'manual') => {
       if (!session || isSubmitting || !authToken) return;
-      if (trigger === 'manual') {
-        const ok = window.confirm('Submit exam now? You cannot edit answers after submitting.');
-        if (!ok) return;
+      if (trigger === 'manual' && !submitConfirmArmed) {
+        setSubmitConfirmArmed(true);
+        setInfoMessage('Click Submit Exam again within 6 seconds to confirm.');
+        return;
       }
 
+      setSubmitConfirmArmed(false);
+      submitInProgressRef.current = true;
       setIsSubmitting(true);
       setErrorMessage('');
       try {
@@ -435,10 +458,8 @@ function StudentExamApp() {
         setPhase('result');
         clearStoredSession();
         void refreshDashboardSafely(authToken);
-        if (document.fullscreenElement) {
-          await document.exitFullscreen().catch(() => undefined);
-        }
       } catch (error) {
+        submitInProgressRef.current = false;
         if (!(await adoptSessionFromError(error)) && !handleUnauthorized(error)) {
           setErrorMessage(error.message || 'Could not submit exam right now.');
         }
@@ -453,6 +474,7 @@ function StudentExamApp() {
       handleUnauthorized,
       isSubmitting,
       refreshDashboardSafely,
+      submitConfirmArmed,
       session,
     ]
   );
@@ -464,6 +486,13 @@ function StudentExamApp() {
     setInfoMessage('Time is up. Submitting your exam now...');
     void handleSubmit('auto');
   }, [handleSubmit, phase, session]);
+
+  useEffect(() => {
+    if (phase !== 'exam') {
+      submitInProgressRef.current = false;
+      setSubmitConfirmArmed(false);
+    }
+  }, [phase]);
 
   useEffect(() => {
     if (phase !== 'exam' || !session || !activeQuestion || !authToken) return;
@@ -498,6 +527,7 @@ function StudentExamApp() {
 
   const reportViolation = useCallback(
     (type, detail) => {
+      if (submitInProgressRef.current) return;
       if (!session || session.submittedAt || phase !== 'exam' || !authToken) return;
       const now = Date.now();
       const recent = violationThrottleRef.current.get(type) ?? 0;
@@ -604,6 +634,8 @@ function StudentExamApp() {
         exams: payload.exams ?? [],
         activeSession: payload.activeSession ?? null,
         trials: payload.trials ?? [],
+        leaderboards: payload.leaderboards ?? { classRoom: '', overall: [], classTop: [], currentStudent: null },
+        generalFeedbackHistory: payload.generalFeedbackHistory ?? [],
       };
       setDashboard(nextDashboard);
       setSelectedExamId(
@@ -636,8 +668,13 @@ function StudentExamApp() {
     setPhase('setup');
     setTourRunning(false);
     setTourIndex(0);
+    setSubmitConfirmArmed(false);
     setTrialReview(null);
     autoSubmitTriggeredRef.current = false;
+    submitInProgressRef.current = false;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+    }
     setInfoMessage('Logged out.');
   };
 
@@ -649,6 +686,7 @@ function StudentExamApp() {
     try {
       const created = await startSession(authToken, { examId: selectedExamId });
       autoSubmitTriggeredRef.current = false;
+      setSubmitConfirmArmed(false);
       setSession(created);
       setCurrentIndex(0);
       setPhase('instructions');
@@ -813,9 +851,14 @@ function StudentExamApp() {
     setCurrentIndex(0);
     setTourRunning(false);
     setTourIndex(0);
+    setSubmitConfirmArmed(false);
     setPhase('setup');
     clearStoredSession();
     autoSubmitTriggeredRef.current = false;
+    submitInProgressRef.current = false;
+    if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => undefined);
+    }
 
     if (authToken) {
       try {
@@ -876,6 +919,59 @@ function StudentExamApp() {
     }
   };
 
+  const handleSaveGeneralFeedback = async (event) => {
+    event.preventDefault();
+    if (!authToken || isSavingGeneralFeedback) {
+      return;
+    }
+
+    const rating = generalFeedbackForm.rating ? Number(generalFeedbackForm.rating) : null;
+    const comment = generalFeedbackForm.comment.trim();
+    if (!rating && !comment) {
+      setInfoMessage('Please add a rating or comment.');
+      return;
+    }
+
+    setErrorMessage('');
+    setIsSavingGeneralFeedback(true);
+
+    try {
+      const payload = await saveStudentGeneralFeedback(authToken, { rating, comment });
+      setGeneralFeedbackForm({ rating: '', comment: '' });
+      setDashboard((previous) =>
+        previous
+          ? {
+              ...previous,
+              generalFeedbackHistory: payload?.history ?? previous.generalFeedbackHistory ?? [],
+            }
+          : previous
+      );
+      setInfoMessage('Feedback sent. Thank you.');
+    } catch (error) {
+      if (!handleUnauthorized(error)) {
+        setErrorMessage(error.message || 'Could not save feedback.');
+      }
+    } finally {
+      setIsSavingGeneralFeedback(false);
+    }
+  };
+
+  const handleDownloadReportCard = async (trialId) => {
+    if (!authToken || !trialId) {
+      return;
+    }
+
+    setErrorMessage('');
+    try {
+      await downloadStudentTrialReportCard(authToken, trialId, `report-card-${trialId}.html`);
+      setInfoMessage('Report card downloaded.');
+    } catch (error) {
+      if (!handleUnauthorized(error)) {
+        setErrorMessage(error.message || 'Could not download report card.');
+      }
+    }
+  };
+
   const handleChangePassword = async (event) => {
     event.preventDefault();
     if (!authToken) return;
@@ -892,13 +988,20 @@ function StudentExamApp() {
     setIsSavingPassword(true);
 
     try {
-      await changeStudentPassword(authToken, {
+      const payload = await changeStudentPassword(authToken, {
         currentPassword: changePasswordForm.currentPassword,
         newPassword: changePasswordForm.newPassword,
       });
+      const activeToken =
+        typeof payload?.token === 'string' && payload.token && Number(payload?.expiresAt) > 0
+          ? payload.token
+          : authToken;
+      if (activeToken !== authToken) {
+        storeToken(payload.token, payload.expiresAt);
+      }
       setChangePasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
       setInfoMessage('Password changed successfully.');
-      await refreshDashboard(authToken);
+      await refreshDashboard(activeToken);
     } catch (error) {
       if (!handleUnauthorized(error)) {
         setErrorMessage(error.message || 'Could not change password.');
@@ -1147,6 +1250,166 @@ function StudentExamApp() {
             {selectedExam && !selectedExam.canAttempt && <p className="error-text">Attempt limit reached.</p>}
           </div>
 
+          <div className="feedback-panel">
+            <h3>Leaderboard</h3>
+            <p className="muted">
+              Overall rank: <strong>{currentLeaderboard?.overallRank ?? '-'}</strong> | Class rank:{' '}
+              <strong>{currentLeaderboard?.classRank ?? '-'}</strong>
+            </p>
+            <div className="result-grid">
+              <div className="result-box">
+                <span>Best Score</span>
+                <strong>{currentLeaderboard?.bestFinalPercent ?? 0}%</strong>
+              </div>
+              <div className="result-box">
+                <span>Average Score</span>
+                <strong>{currentLeaderboard?.averageFinalPercent ?? 0}%</strong>
+              </div>
+              <div className="result-box">
+                <span>Submitted Trials</span>
+                <strong>{currentLeaderboard?.submittedTrials ?? 0}</strong>
+              </div>
+            </div>
+
+            <div className="table-wrap medium">
+              <table>
+                <thead>
+                  <tr>
+                    <th colSpan={4}>Class Top ({dashboard?.leaderboards?.classRoom || '-'})</th>
+                  </tr>
+                  <tr>
+                    <th>Rank</th>
+                    <th>Name</th>
+                    <th>Best %</th>
+                    <th>Trials</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leaderboardClassTop.slice(0, 10).map((entry) => (
+                    <tr key={`class-${entry.rank}-${entry.studentName}`}>
+                      <td>{entry.rank}</td>
+                      <td>
+                        {entry.studentName}
+                        {entry.isCurrentStudent ? ' (You)' : ''}
+                      </td>
+                      <td>{entry.bestFinalPercent}%</td>
+                      <td>{entry.submittedTrials}</td>
+                    </tr>
+                  ))}
+                  {!leaderboardClassTop.length && (
+                    <tr>
+                      <td colSpan={4}>No class leaderboard data yet.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="table-wrap medium">
+              <table>
+                <thead>
+                  <tr>
+                    <th colSpan={5}>Overall Top</th>
+                  </tr>
+                  <tr>
+                    <th>Rank</th>
+                    <th>Name</th>
+                    <th>Class</th>
+                    <th>Best %</th>
+                    <th>Trials</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leaderboardOverall.slice(0, 10).map((entry) => (
+                    <tr key={`overall-${entry.rank}-${entry.studentName}-${entry.classRoom}`}>
+                      <td>{entry.rank}</td>
+                      <td>
+                        {entry.studentName}
+                        {entry.isCurrentStudent ? ' (You)' : ''}
+                      </td>
+                      <td>{entry.classRoom}</td>
+                      <td>{entry.bestFinalPercent}%</td>
+                      <td>{entry.submittedTrials}</td>
+                    </tr>
+                  ))}
+                  {!leaderboardOverall.length && (
+                    <tr>
+                      <td colSpan={5}>No leaderboard data yet.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <form className="feedback-panel" onSubmit={handleSaveGeneralFeedback}>
+            <h3>General Feedback</h3>
+            <p className="muted">Share general app feedback directly from your dashboard.</p>
+            <div className="feedback-grid">
+              <div>
+                <label htmlFor="generalRating">Rating (1 to 5)</label>
+                <select
+                  id="generalRating"
+                  value={generalFeedbackForm.rating}
+                  onChange={(event) =>
+                    setGeneralFeedbackForm((previous) => ({ ...previous, rating: event.target.value }))
+                  }
+                >
+                  <option value="">No rating</option>
+                  <option value="1">1 - Poor</option>
+                  <option value="2">2 - Fair</option>
+                  <option value="3">3 - Okay</option>
+                  <option value="4">4 - Good</option>
+                  <option value="5">5 - Excellent</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="generalComment">Comment</label>
+                <textarea
+                  id="generalComment"
+                  rows={3}
+                  maxLength={600}
+                  value={generalFeedbackForm.comment}
+                  onChange={(event) =>
+                    setGeneralFeedbackForm((previous) => ({ ...previous, comment: event.target.value }))
+                  }
+                />
+              </div>
+            </div>
+            <div className="inline-actions">
+              <button type="submit" className="btn btn-outline" disabled={isSavingGeneralFeedback}>
+                {isSavingGeneralFeedback ? 'Sending...' : 'Send Feedback'}
+              </button>
+            </div>
+            <div className="table-wrap medium">
+              <table>
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Rating</th>
+                    <th>Comment</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {generalFeedbackHistory.map((entry) => (
+                    <tr key={entry.id}>
+                      <td>{formatDateTime(entry.createdAt)}</td>
+                      <td>{entry.rating ?? '-'}</td>
+                      <td title={entry.comment || '-'}>
+                        <span className="truncate-2">{entry.comment || '-'}</span>
+                      </td>
+                    </tr>
+                  ))}
+                  {!generalFeedbackHistory.length && (
+                    <tr>
+                      <td colSpan={3}>No general feedback sent yet.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </form>
+
           <form className="feedback-panel" onSubmit={handleChangePassword}>
             <h3>Change Password</h3>
             <div className="feedback-grid">
@@ -1217,12 +1480,8 @@ function StudentExamApp() {
                       </td>
                       <td>#{trial.trialNumber ?? 1}</td>
                       <td>{trial.status}</td>
-                      <td>{trial.resultsReleased ? `${trial.summary?.finalPercent ?? 0}%` : 'Locked'}</td>
-                      <td>
-                        {trial.resultsReleased
-                          ? trial.summary?.totalViolationsCount ?? trial.summary?.violationsCount ?? 0
-                          : '-'}
-                      </td>
+                      <td>{`${trial.summary?.finalPercent ?? 0}%`}</td>
+                      <td>{trial.summary?.totalViolationsCount ?? trial.summary?.violationsCount ?? 0}</td>
                       <td>{formatDateTime(trial.startedAt)}</td>
                       <td>
                         {trial.resultsReleased
@@ -1230,14 +1489,23 @@ function StudentExamApp() {
                           : `Opens ${formatDateTime(trial.resultsAvailableAt)}`}
                       </td>
                       <td className="cell-tight">
-                        <button
-                          type="button"
-                          className="btn btn-outline btn-xs"
-                          onClick={() => handleOpenTrialReview(trial.id)}
-                          disabled={isReviewLoading}
-                        >
-                          Review
-                        </button>
+                        <div className="inline-actions compact">
+                          <button
+                            type="button"
+                            className="btn btn-outline btn-xs"
+                            onClick={() => handleOpenTrialReview(trial.id)}
+                            disabled={isReviewLoading}
+                          >
+                            Review
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-outline btn-xs"
+                            onClick={() => void handleDownloadReportCard(trial.id)}
+                          >
+                            Report
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1283,8 +1551,8 @@ function StudentExamApp() {
                         <th>#</th>
                         <th>Question</th>
                         <th>Selected</th>
-                        <th>Correct</th>
-                        <th>Result</th>
+                        {trialReview.resultsReleased !== false && <th>Correct</th>}
+                        {trialReview.resultsReleased !== false && <th>Result</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -1295,19 +1563,23 @@ function StudentExamApp() {
                             <span className="truncate-2">{item.text}</span>
                           </td>
                           <td>{(item.selectedOptionIds ?? []).join(', ') || '-'}</td>
-                          <td>{(item.correctOptionIds ?? []).join(', ') || '-'}</td>
-                          <td>
-                            {item.isCorrect === null || item.isCorrect === undefined
-                              ? 'Locked'
-                              : item.isCorrect
-                                ? 'Correct'
-                                : 'Wrong'}
-                          </td>
+                          {trialReview.resultsReleased !== false && (
+                            <td>{(item.correctOptionIds ?? []).join(', ') || '-'}</td>
+                          )}
+                          {trialReview.resultsReleased !== false && (
+                            <td>
+                              {item.isCorrect === null || item.isCorrect === undefined
+                                ? 'Locked'
+                                : item.isCorrect
+                                  ? 'Correct'
+                                  : 'Wrong'}
+                            </td>
+                          )}
                         </tr>
                       ))}
                       {!(trialReview.questionReview ?? []).length && (
                         <tr>
-                          <td colSpan={5}>No review data available.</td>
+                          <td colSpan={trialReview.resultsReleased === false ? 3 : 5}>No review data available.</td>
                         </tr>
                       )}
                     </tbody>
@@ -1363,6 +1635,17 @@ function StudentExamApp() {
 
   if (phase === 'result' && session) {
     const summary = session.summary;
+    const resultReviewRows = Array.isArray(session.questionReview) && session.questionReview.length > 0
+      ? session.questionReview
+      : (session.questions ?? []).map((question, index) => ({
+          index: index + 1,
+          questionId: question.id,
+          text: question.text,
+          options: question.options,
+          selectedOptionIds: session.responses?.[question.id] ?? [],
+          correctOptionIds: [],
+          isCorrect: null,
+        }));
 
     return (
       <main className="center-screen">
@@ -1376,38 +1659,36 @@ function StudentExamApp() {
             <strong>#{session.trialNumber ?? 1}</strong>
           </p>
 
-          {!resultsLocked && (
-            <div className="result-grid">
-              <div className="result-box">
-                <span>Answered</span>
-                <strong>
-                  {summary?.answeredCount ?? 0}/{summary?.totalQuestions ?? 40}
-                </strong>
-              </div>
-              <div className="result-box">
-                <span>Correct</span>
-                <strong>
-                  {summary?.correctCount ?? 0}/{summary?.totalQuestions ?? 40}
-                </strong>
-              </div>
-              <div className="result-box">
-                <span>Raw Score</span>
-                <strong>{summary?.rawPercent ?? 0}%</strong>
-              </div>
-              <div className="result-box">
-                <span>Active Violations</span>
-                <strong>{summary?.violationsCount ?? 0}</strong>
-              </div>
-              <div className="result-box">
-                <span>Total Violations</span>
-                <strong>{summary?.totalViolationsCount ?? 0}</strong>
-              </div>
-              <div className="result-box final">
-                <span>Final Score</span>
-                <strong>{summary?.finalPercent ?? 0}%</strong>
-              </div>
+          <div className="result-grid">
+            <div className="result-box">
+              <span>Answered</span>
+              <strong>
+                {summary?.answeredCount ?? 0}/{summary?.totalQuestions ?? 40}
+              </strong>
             </div>
-          )}
+            <div className="result-box">
+              <span>Correct</span>
+              <strong>
+                {summary?.correctCount ?? 0}/{summary?.totalQuestions ?? 40}
+              </strong>
+            </div>
+            <div className="result-box">
+              <span>Raw Score</span>
+              <strong>{summary?.rawPercent ?? 0}%</strong>
+            </div>
+            <div className="result-box">
+              <span>Active Violations</span>
+              <strong>{summary?.violationsCount ?? 0}</strong>
+            </div>
+            <div className="result-box">
+              <span>Total Violations</span>
+              <strong>{summary?.totalViolationsCount ?? 0}</strong>
+            </div>
+            <div className="result-box final">
+              <span>Final Score</span>
+              <strong>{summary?.finalPercent ?? 0}%</strong>
+            </div>
+          </div>
 
           {resultsLocked && (
             <div className="feedback-panel">
@@ -1426,7 +1707,7 @@ function StudentExamApp() {
           </p>
 
           <div className="feedback-panel">
-            <h3>Your Selected Answers</h3>
+            <h3>Answer Review</h3>
             <div className="table-wrap medium">
               <table>
                 <thead>
@@ -1434,20 +1715,41 @@ function StudentExamApp() {
                     <th>#</th>
                     <th>Question</th>
                     <th>Your Answer</th>
+                    {!resultsLocked && <th>Correct Answer</th>}
+                    {!resultsLocked && <th>Result</th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {(session.questions ?? []).map((question, index) => (
-                    <tr key={`${session.sessionId}-${question.id}`}>
-                      <td>{index + 1}</td>
-                      <td title={question.text}>
-                        <span className="truncate-2">{question.text}</span>
+                  {resultReviewRows.map((item) => (
+                    <tr key={`${session.sessionId}-${item.questionId}`}>
+                      <td>{item.index}</td>
+                      <td title={item.text}>
+                        <span className="truncate-2">{item.text}</span>
                       </td>
-                      <td title={formatSelectedOptions(question, session.responses)}>
-                        <span className="truncate-2">{formatSelectedOptions(question, session.responses)}</span>
+                      <td title={formatOptionList(item, item.selectedOptionIds)}>
+                        <span className="truncate-2">{formatOptionList(item, item.selectedOptionIds)}</span>
                       </td>
+                      {!resultsLocked && (
+                        <td title={formatOptionList(item, item.correctOptionIds)}>
+                          <span className="truncate-2">{formatOptionList(item, item.correctOptionIds)}</span>
+                        </td>
+                      )}
+                      {!resultsLocked && (
+                        <td>
+                          {item.isCorrect === null || item.isCorrect === undefined
+                            ? '-'
+                            : item.isCorrect
+                              ? 'Correct'
+                              : 'Wrong'}
+                        </td>
+                      )}
                     </tr>
                   ))}
+                  {!resultReviewRows.length && (
+                    <tr>
+                      <td colSpan={resultsLocked ? 3 : 5}>No review data available.</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1495,6 +1797,13 @@ function StudentExamApp() {
           </form>
 
           <div className="inline-actions">
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={() => void handleDownloadReportCard(session.sessionId)}
+            >
+              Download Report Card
+            </button>
             <button type="button" className="btn btn-primary" onClick={() => void handleBackToDashboard()}>
               Back to Dashboard
             </button>
@@ -1515,6 +1824,10 @@ function StudentExamApp() {
     : 0;
   const unansweredCount = (session?.questions?.length ?? 0) - answeredCount;
   const violationCount = session?.violations?.length ?? 0;
+  const leaderboardOverall = dashboard?.leaderboards?.overall ?? [];
+  const leaderboardClassTop = dashboard?.leaderboards?.classTop ?? [];
+  const currentLeaderboard = dashboard?.leaderboards?.currentStudent ?? null;
+  const generalFeedbackHistory = dashboard?.generalFeedbackHistory ?? [];
 
   return (
     <main className="exam-shell">
@@ -1558,8 +1871,12 @@ function StudentExamApp() {
             {isFullscreen ? 'Fullscreen Active' : 'Go Full Screen'}
           </button>
 
-          <button type="button" className="btn btn-danger" onClick={() => void handleSubmit('manual')}>
-            {isSubmitting ? 'Submitting...' : 'Submit Exam'}
+          <button
+            type="button"
+            className={`btn ${submitConfirmArmed ? 'btn-warning' : 'btn-danger'}`}
+            onClick={() => void handleSubmit('manual')}
+          >
+            {isSubmitting ? 'Submitting...' : submitConfirmArmed ? 'Confirm Submit' : 'Submit Exam'}
           </button>
         </div>
       </header>

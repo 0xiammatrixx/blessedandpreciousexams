@@ -6,6 +6,7 @@ import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { MongoClient } from 'mongodb';
+import { hashPasswordScrypt } from '../server/authUtils.js';
 
 function parseEnvText(text) {
   const out = {};
@@ -127,6 +128,176 @@ function printStep(message) {
   console.log(`[smoke] ${message}`);
 }
 
+function withStudentHeaders(token, headers = {}) {
+  return {
+    Authorization: `Bearer ${token}`,
+    ...headers,
+  };
+}
+
+function withAdminHeaders(token, headers = {}) {
+  return {
+    Authorization: `Bearer ${token}`,
+    ...headers,
+  };
+}
+
+async function requestText(baseUrl, pathName, options = {}) {
+  const { headers: inputHeaders = {}, ...rest } = options;
+  const response = await fetch(`${baseUrl}${pathName}`, {
+    ...rest,
+    headers: new Headers(inputHeaders),
+  });
+
+  const body = await response.text();
+  if (!response.ok) {
+    const error = new Error(`${pathName} failed: HTTP ${response.status}`);
+    error.status = response.status;
+    error.payload = { body: body.slice(0, 600) };
+    throw error;
+  }
+
+  return {
+    status: response.status,
+    body,
+    headers: response.headers,
+  };
+}
+
+function buildStudentApi(baseUrl, token) {
+  return {
+    fetchMe() {
+      return requestJson(baseUrl, '/api/student/me', {
+        method: 'GET',
+        headers: withStudentHeaders(token),
+      });
+    },
+    changePassword(payload) {
+      return requestJson(baseUrl, '/api/student/change-password', {
+        method: 'POST',
+        headers: withStudentHeaders(token),
+        json: payload,
+      });
+    },
+    startExam(payload) {
+      return requestJson(baseUrl, '/api/exam/start', {
+        method: 'POST',
+        headers: withStudentHeaders(token),
+        json: payload,
+      });
+    },
+    markSeen(sessionId, payload) {
+      return requestJson(baseUrl, `/api/exam/${encodeURIComponent(sessionId)}/seen`, {
+        method: 'POST',
+        headers: withStudentHeaders(token),
+        json: payload,
+      });
+    },
+    saveAnswer(sessionId, payload) {
+      return requestJson(baseUrl, `/api/exam/${encodeURIComponent(sessionId)}/answer`, {
+        method: 'POST',
+        headers: withStudentHeaders(token),
+        json: payload,
+      });
+    },
+    saveFlag(sessionId, payload) {
+      return requestJson(baseUrl, `/api/exam/${encodeURIComponent(sessionId)}/flag`, {
+        method: 'POST',
+        headers: withStudentHeaders(token),
+        json: payload,
+      });
+    },
+    logProctor(sessionId, payload) {
+      return requestJson(baseUrl, `/api/exam/${encodeURIComponent(sessionId)}/proctor`, {
+        method: 'POST',
+        headers: withStudentHeaders(token),
+        json: payload,
+      });
+    },
+    submit(sessionId) {
+      return requestJson(baseUrl, `/api/exam/${encodeURIComponent(sessionId)}/submit`, {
+        method: 'POST',
+        headers: withStudentHeaders(token),
+      });
+    },
+    saveFeedback(sessionId, payload) {
+      return requestJson(baseUrl, `/api/exam/${encodeURIComponent(sessionId)}/feedback`, {
+        method: 'POST',
+        headers: withStudentHeaders(token),
+        json: payload,
+      });
+    },
+    listTrials() {
+      return requestJson(baseUrl, '/api/student/trials', {
+        method: 'GET',
+        headers: withStudentHeaders(token),
+      });
+    },
+    getTrial(sessionId) {
+      return requestJson(baseUrl, `/api/student/trials/${encodeURIComponent(sessionId)}`, {
+        method: 'GET',
+        headers: withStudentHeaders(token),
+      });
+    },
+    saveGeneralFeedback(payload) {
+      return requestJson(baseUrl, '/api/student/feedback', {
+        method: 'POST',
+        headers: withStudentHeaders(token),
+        json: payload,
+      });
+    },
+  };
+}
+
+function buildAdminApi(baseUrl, token) {
+  return {
+    fetchUsers(filters = {}) {
+      const params = new URLSearchParams();
+      if (filters.search) {
+        params.set('search', filters.search);
+      }
+      if (filters.classRoom) {
+        params.set('classRoom', filters.classRoom);
+      }
+      if (filters.status) {
+        params.set('status', filters.status);
+      }
+
+      const query = params.toString();
+      return requestJson(baseUrl, `/api/admin/users${query ? `?${query}` : ''}`, {
+        method: 'GET',
+        headers: withAdminHeaders(token),
+      });
+    },
+    resetUserPassword(userId, payload) {
+      return requestJson(baseUrl, `/api/admin/users/${encodeURIComponent(userId)}/password`, {
+        method: 'POST',
+        headers: withAdminHeaders(token),
+        json: payload,
+      });
+    },
+    fetchBranding() {
+      return requestJson(baseUrl, '/api/admin/settings/branding', {
+        method: 'GET',
+        headers: withAdminHeaders(token),
+      });
+    },
+    updateBranding(payload) {
+      return requestJson(baseUrl, '/api/admin/settings/branding', {
+        method: 'PATCH',
+        headers: withAdminHeaders(token),
+        json: payload,
+      });
+    },
+    downloadSessionReportCard(sessionId) {
+      return requestText(baseUrl, `/api/admin/sessions/${encodeURIComponent(sessionId)}/report-card`, {
+        method: 'GET',
+        headers: withAdminHeaders(token),
+      });
+    },
+  };
+}
+
 async function main() {
   const envFile = loadEnvFile();
   const mongoUri = process.env.MONGO_URI ?? envFile.MONGO_URI ?? '';
@@ -147,36 +318,58 @@ async function main() {
   const port = 4700 + Math.floor(Math.random() * 200);
   const smokeDbName = `${baseDbName}_smoke_${timestamp}`;
   const baseUrl = `http://127.0.0.1:${port}`;
+  const smokeAdminPasscode = `smoke-admin-${timestamp}`;
+  const smokeAdminPasscodeHash = hashPasswordScrypt(smokeAdminPasscode);
 
-  const child = spawn('node', ['server/index.js'], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      ...envFile,
-      PORT: String(port),
-      MONGO_URI: mongoUri,
-      MONGO_DB_NAME: smokeDbName,
-      RESULT_RELEASE_DELAY_MS: '0',
-      KEEP_ALIVE_ENABLED: 'false',
-      MONGO_DNS_SERVERS: mongoDnsServers,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const serverEnv = {
+    ...process.env,
+    ...envFile,
+    ADMIN_PASSCODE_HASH: smokeAdminPasscodeHash,
+    PORT: String(port),
+    MONGO_URI: mongoUri,
+    MONGO_DB_NAME: smokeDbName,
+    RESULT_RELEASE_DELAY_MS: '0',
+    KEEP_ALIVE_ENABLED: 'false',
+    MONGO_DNS_SERVERS: mongoDnsServers,
+  };
 
+  let child = null;
   const serverLogs = [];
-  child.stdout.on('data', (chunk) => {
-    const text = chunk.toString();
-    serverLogs.push(text);
-  });
-  child.stderr.on('data', (chunk) => {
-    const text = chunk.toString();
-    serverLogs.push(text);
-  });
+  async function startServer() {
+    child = spawn('node', ['server/index.js'], {
+      cwd: process.cwd(),
+      env: serverEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    child.stdout.on('data', (chunk) => {
+      const text = chunk.toString();
+      serverLogs.push(text);
+    });
+    child.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      serverLogs.push(text);
+    });
+
+    await waitForServer(baseUrl);
+  }
+
+  async function stopServer() {
+    if (!child || child.killed) {
+      return;
+    }
+
+    child.kill('SIGTERM');
+    await delay(350);
+    if (!child.killed) {
+      child.kill('SIGKILL');
+    }
+  }
 
   let client = null;
   try {
     printStep(`Booting local server on ${baseUrl} with DB ${smokeDbName}`);
-    await waitForServer(baseUrl);
+    await startServer();
     printStep('Server is healthy');
 
     const fullName = `Smoke Student ${timestamp}`;
@@ -191,24 +384,14 @@ async function main() {
     assert(typeof loginPayload.token === 'string' && loginPayload.token.length > 10, 'Login token missing.');
     printStep('Student login passed');
 
-    const authHeaders = {
-      Authorization: `Bearer ${loginPayload.token}`,
-    };
-
-    const meBeforePasswordChange = await requestJson(baseUrl, '/api/student/me', {
-      method: 'GET',
-      headers: authHeaders,
-    });
+    const studentApi = buildStudentApi(baseUrl, loginPayload.token);
+    const meBeforePasswordChange = await studentApi.fetchMe();
     assert(meBeforePasswordChange?.user?.email === email, 'Student profile fetch failed before password change.');
 
     const newPassword = `${password}9`;
-    await requestJson(baseUrl, '/api/student/change-password', {
-      method: 'POST',
-      headers: authHeaders,
-      json: {
-        currentPassword: password,
-        newPassword,
-      },
+    await studentApi.changePassword({
+      currentPassword: password,
+      newPassword,
     });
     printStep('Password change passed');
 
@@ -233,56 +416,76 @@ async function main() {
     );
     printStep('Re-login with new password passed');
 
-    const freshAuthHeaders = {
-      Authorization: `Bearer ${reloginPayload.token}`,
-    };
+    const examApi = buildStudentApi(baseUrl, reloginPayload.token);
+    const dashboard = await examApi.fetchMe();
+    assert(Array.isArray(dashboard?.leaderboards?.overall), 'Student dashboard should include overall leaderboard.');
+    assert(Array.isArray(dashboard?.leaderboards?.classTop), 'Student dashboard should include class leaderboard.');
+    const availableExams = Array.isArray(dashboard?.exams) ? dashboard.exams : [];
+    assert(availableExams.length >= 1, 'No exam available for the student.');
+    const selectedExam = availableExams.find((exam) => exam.id === 'general') ?? availableExams[0];
+    assert(selectedExam?.id, 'Selected exam is invalid.');
+    printStep(`Selected exam from dashboard: ${selectedExam.id} (${selectedExam.title ?? 'Untitled'})`);
 
-    const started = await requestJson(baseUrl, '/api/exam/start', {
-      method: 'POST',
-      headers: freshAuthHeaders,
-      json: { examId: 'general' },
+    const generalFeedbackPayload = await examApi.saveGeneralFeedback({
+      rating: 5,
+      comment: 'Dashboard feedback from smoke test',
     });
+    assert(
+      Array.isArray(generalFeedbackPayload?.history) && generalFeedbackPayload.history.length >= 1,
+      'General dashboard feedback was not saved.'
+    );
+    printStep('Student general dashboard feedback save passed');
+
+    printStep('Restarting API process to verify student token persistence...');
+    await stopServer();
+    await startServer();
+
+    const afterRestartDashboard = await examApi.fetchMe();
+    assert(afterRestartDashboard?.user?.email === email, 'Token did not survive restart.');
+    printStep('Student token is still valid after server restart');
+
+    const started = await examApi.startExam({ examId: selectedExam.id });
+    assert(started?.exam?.id === selectedExam.id, 'Started exam does not match selected dashboard exam.');
+    assert(started?.exam?.id === 'general', 'Smoke flow must run against General Exam Pool in this environment.');
     assert(typeof started.sessionId === 'string', 'Session ID missing from start response.');
     assert(Array.isArray(started.questions) && started.questions.length === 40, 'Expected 40 questions on start.');
-    printStep(`Session started: ${started.sessionId}`);
+    printStep(`Session started: ${started.sessionId} (${started.exam?.title ?? selectedExam.title})`);
 
     const targetQuestions = started.questions.slice(0, 5);
     for (let index = 0; index < targetQuestions.length; index += 1) {
       const question = targetQuestions[index];
       assert(question?.id, `Question ${index + 1} has no ID.`);
 
-      await requestJson(baseUrl, `/api/exam/${started.sessionId}/seen`, {
-        method: 'POST',
-        headers: freshAuthHeaders,
-        json: { questionId: question.id, questionIndex: index },
-      });
+      await examApi.markSeen(started.sessionId, { questionId: question.id, questionIndex: index });
 
       const selectedOptionIds =
         question.type === 'multi'
           ? question.options.slice(0, 2).map((item) => item.id)
           : [question.options[0].id];
 
-      await requestJson(baseUrl, `/api/exam/${started.sessionId}/answer`, {
-        method: 'POST',
-        headers: freshAuthHeaders,
-        json: {
-          questionId: question.id,
-          questionIndex: index,
-          selectedOptionIds,
-        },
+      await examApi.saveAnswer(started.sessionId, {
+        questionId: question.id,
+        questionIndex: index,
+        selectedOptionIds,
       });
     }
     printStep('Seen + answer save passed for first 5 questions');
 
-    await requestJson(baseUrl, `/api/exam/${started.sessionId}/flag`, {
-      method: 'POST',
-      headers: freshAuthHeaders,
-      json: {
-        questionId: targetQuestions[0].id,
-        questionIndex: 0,
-        flagged: true,
-      },
+    await examApi.saveFlag(started.sessionId, {
+      questionId: targetQuestions[0].id,
+      questionIndex: 0,
+      flagged: true,
     });
+
+    await requestJson(baseUrl, `/api/exam/${started.sessionId}/proctor`, {
+      method: 'POST',
+      headers: withStudentHeaders(reloginPayload.token),
+      body: JSON.stringify({
+        type: 'window_blur',
+        detail: 'legacy request without content-type header',
+      }),
+    });
+    printStep('Legacy proctor payload (no content-type) accepted');
 
     await requestJsonExpectError(
       baseUrl,
@@ -291,50 +494,136 @@ async function main() {
       'violation type is required',
       {
         method: 'POST',
-        headers: freshAuthHeaders,
+        headers: withStudentHeaders(reloginPayload.token),
         json: { detail: 'missing type test' },
       }
     );
 
-    await requestJson(baseUrl, `/api/exam/${started.sessionId}/proctor`, {
-      method: 'POST',
-      headers: freshAuthHeaders,
-      json: {
-        type: 'tab_switch',
-        detail: 'smoke test event',
-      },
+    await examApi.logProctor(started.sessionId, {
+      type: 'tab_switch',
+      detail: 'smoke test event',
     });
     printStep('Flag + proctor logging passed');
 
-    const submitted = await requestJson(baseUrl, `/api/exam/${started.sessionId}/submit`, {
-      method: 'POST',
-      headers: freshAuthHeaders,
-    });
+    const preSubmitFeedback = await requestJsonExpectError(
+      baseUrl,
+      `/api/exam/${started.sessionId}/feedback`,
+      409,
+      'after submitting',
+      {
+        method: 'POST',
+        headers: withStudentHeaders(reloginPayload.token),
+        json: { rating: 3, comment: 'pre-submit feedback should be blocked' },
+      }
+    );
+    assert(
+      typeof preSubmitFeedback?.session?.sessionId === 'string',
+      '409 feedback response should include current session payload.'
+    );
+    printStep('Pre-submit feedback conflict is returned with session payload');
+
+    const submitted = await examApi.submit(started.sessionId);
     assert(submitted?.session?.submittedAt, 'Submit did not return submitted session.');
     printStep('Submit passed');
 
-    await requestJson(baseUrl, `/api/exam/${started.sessionId}/feedback`, {
-      method: 'POST',
-      headers: freshAuthHeaders,
-      json: {
-        rating: 4,
-        comment: 'Smoke test feedback',
-      },
+    await examApi.saveFeedback(started.sessionId, {
+      rating: 4,
+      comment: 'Smoke test feedback',
     });
     printStep('Feedback save passed');
 
-    const trials = await requestJson(baseUrl, '/api/student/trials', {
-      method: 'GET',
-      headers: freshAuthHeaders,
-    });
+    const studentReportCard = await requestText(
+      baseUrl,
+      `/api/student/trials/${encodeURIComponent(started.sessionId)}/report-card`,
+      {
+        method: 'GET',
+        headers: withStudentHeaders(reloginPayload.token),
+      }
+    );
+    assert(
+      studentReportCard.body.includes(started.sessionId),
+      'Student report card should include session ID.'
+    );
+    assert(
+      studentReportCard.body.includes('Final Score'),
+      'Student report card should include score summary.'
+    );
+    printStep('Student report card download endpoint passed');
+
+    const trials = await examApi.listTrials();
     assert(Array.isArray(trials.trials) && trials.trials.length >= 1, 'No student trials returned.');
 
-    const trial = await requestJson(baseUrl, `/api/student/trials/${started.sessionId}`, {
-      method: 'GET',
-      headers: freshAuthHeaders,
-    });
+    const trial = await examApi.getTrial(started.sessionId);
     assert(Array.isArray(trial?.trial?.questionReview), 'Question review missing from trial response.');
     printStep('Student trials endpoints passed');
+
+    const adminLoginPayload = await requestJson(baseUrl, '/api/admin/login', {
+      method: 'POST',
+      json: { passcode: smokeAdminPasscode },
+    });
+    assert(
+      typeof adminLoginPayload?.token === 'string' && adminLoginPayload.token.length > 10,
+      'Admin login token missing.'
+    );
+    const adminApi = buildAdminApi(baseUrl, adminLoginPayload.token);
+    printStep('Admin login passed');
+
+    const brandingBefore = await adminApi.fetchBranding();
+    assert(brandingBefore?.branding?.schoolName, 'Admin branding fetch did not return school name.');
+
+    const brandingName = `Smoke Academy ${timestamp}`;
+    const brandingLogo = 'https://example.com/smoke-logo.png';
+    const brandingAfter = await adminApi.updateBranding({
+      schoolName: brandingName,
+      logoUrl: brandingLogo,
+    });
+    assert(
+      brandingAfter?.branding?.schoolName === brandingName,
+      'Admin branding school name did not update.'
+    );
+    assert(brandingAfter?.branding?.logoUrl === brandingLogo, 'Admin branding logo URL did not update.');
+
+    const metaAfterBranding = await requestJson(baseUrl, '/api/exam/meta', { method: 'GET' });
+    assert(metaAfterBranding?.schoolName === brandingName, 'Meta schoolName should reflect branding update.');
+
+    const adminReportCard = await adminApi.downloadSessionReportCard(started.sessionId);
+    assert(adminReportCard.body.includes(brandingName), 'Admin report card should include updated school name.');
+    assert(adminReportCard.body.includes(started.sessionId), 'Admin report card should include session ID.');
+    printStep('Admin branding + report card endpoints passed');
+
+    const usersPayload = await adminApi.fetchUsers({ search: email });
+    const matchedUser = (usersPayload?.users ?? []).find((row) => row.email === email);
+    assert(matchedUser?.id, 'Admin users list did not include smoke student.');
+
+    const adminResetPassword = `${newPassword}x`;
+    const resetPayload = await adminApi.resetUserPassword(matchedUser.id, {
+      newPassword: adminResetPassword,
+      mustChangePassword: true,
+    });
+    assert(resetPayload?.user?.mustChangePassword === true, 'Admin reset should force password change.');
+
+    await requestJsonExpectError(baseUrl, '/api/student/me', 401, 'invalid or expired student token', {
+      method: 'GET',
+      headers: withStudentHeaders(reloginPayload.token),
+    });
+
+    await requestJsonExpectError(
+      baseUrl,
+      '/api/student/login',
+      401,
+      'invalid password',
+      {
+        method: 'POST',
+        json: { fullName, classRoom, email, password: newPassword },
+      }
+    );
+
+    const postResetLogin = await requestJson(baseUrl, '/api/student/login', {
+      method: 'POST',
+      json: { fullName, classRoom, email, password: adminResetPassword },
+    });
+    assert(postResetLogin?.user?.mustChangePassword === true, 'Post-reset login should require password change.');
+    printStep('Admin password reset flow passed');
 
     client = new MongoClient(mongoUri, {
       maxPoolSize: 5,
@@ -356,6 +645,20 @@ async function main() {
       (savedSession.feedback?.comment ?? '').includes('Smoke test feedback'),
       'Feedback comment not persisted.'
     );
+
+    const savedGeneralFeedback = await db.collection('student_general_feedback').findOne({ email });
+    assert(savedGeneralFeedback, 'General dashboard feedback not found in MongoDB.');
+    assert(
+      (savedGeneralFeedback.comment ?? '').includes('Dashboard feedback from smoke test'),
+      'General dashboard feedback comment not persisted.'
+    );
+
+    const brandingSettingsRow = await db.collection('settings').findOne({ key: 'branding' });
+    assert(
+      brandingSettingsRow?.value?.schoolName?.startsWith('Smoke Academy '),
+      'Branding settings were not persisted.'
+    );
+
     printStep('Mongo persistence assertions passed');
 
     console.log('\n[smoke] PASS: end-to-end exam flow is working.');
@@ -396,13 +699,7 @@ async function main() {
       }
     }
 
-    if (!child.killed) {
-      child.kill('SIGTERM');
-      await delay(350);
-      if (!child.killed) {
-        child.kill('SIGKILL');
-      }
-    }
+    await stopServer();
   }
 }
 
