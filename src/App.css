@@ -568,6 +568,14 @@ body {
   grid-template-columns: 1fr;
 }
 
+.exam-manager-grid {
+  grid-template-columns: minmax(320px, 0.95fr) minmax(560px, 1.05fr);
+}
+
+.exam-manager-full {
+  grid-column: 1 / -1;
+}
+
 .panel-title-row {
   margin-bottom: 0.6rem;
   display: flex;
@@ -621,7 +629,11 @@ body {
   font-size: 0.84rem;
   color: var(--ink-800);
   vertical-align: top;
-  word-break: break-word;
+}
+
+.table-wrap td {
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .table-wrap td > .truncate-line,
@@ -680,6 +692,9 @@ body {
   position: sticky;
   top: 0;
   z-index: 1;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .sessions-table {
@@ -694,6 +709,14 @@ body {
 .sessions-table th.cell-tight,
 .sessions-table td.cell-tight {
   max-width: none;
+}
+
+.published-exams-wrap table {
+  min-width: 920px;
+}
+
+.published-exams-classes-cell .truncate-line {
+  max-width: clamp(240px, 34vw, 640px);
 }
 
 .cell-tight {
@@ -1021,6 +1044,10 @@ body {
 
   .sessions-table {
     min-width: 940px;
+  }
+
+  .published-exams-wrap table {
+    min-width: 840px;
   }
 
   .pagination-row {

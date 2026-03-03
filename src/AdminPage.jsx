@@ -2598,8 +2598,8 @@ function AdminPage() {
       )}
 
       {widgets.examManager && (
-      <section className="admin-grid-2">
-        <article className="card-panel wide admin-card">
+      <section className="admin-grid-2 exam-manager-grid">
+        <article className="card-panel wide admin-card exam-general-card">
           <div className="panel-title-row">
             <h2>General Exam Settings</h2>
             {loading.updateExam && <span className="muted">Saving...</span>}
@@ -2732,7 +2732,7 @@ function AdminPage() {
           </form>
         </article>
 
-        <article className="card-panel wide admin-card">
+        <article className="card-panel wide admin-card exam-create-card">
           <div className="panel-title-row">
             <h2>Create New Exam With Questions</h2>
             <span className="muted">Draft questions: {examQuestionDrafts.length}</span>
@@ -3043,14 +3043,16 @@ function AdminPage() {
               {loading.addExam ? 'Creating Exam...' : 'Create Exam'}
             </button>
           </form>
+        </article>
 
+        <article className="card-panel wide admin-card exam-manager-full">
           <div className="panel-title-row">
             <h2>Published / Draft Exams</h2>
             {loading.exams && <span className="muted">Loading...</span>}
           </div>
 
-          <div className="table-wrap medium">
-            <table>
+          <div className="table-wrap medium published-exams-wrap">
+            <table className="published-exams-table">
               <thead>
                 <tr>
                   <th>Exam</th>
@@ -3073,7 +3075,10 @@ function AdminPage() {
                     <td>{exam.maxAttempts ?? 3}</td>
                     <td>{exam.questionCount}</td>
                     <td>{exam.availableQuestionCount ?? 0}</td>
-                    <td title={(exam.allowedClasses ?? []).join(', ')}>
+                    <td
+                      className="published-exams-classes-cell"
+                      title={(exam.allowedClasses ?? []).join(', ')}
+                    >
                       <span className="truncate-line">{(exam.allowedClasses ?? []).join(', ')}</span>
                     </td>
                   </tr>
