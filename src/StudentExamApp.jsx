@@ -138,6 +138,7 @@ function StudentExamApp() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingAnswerSaves, setPendingAnswerSaves] = useState(0);
   const [isSavingFeedback, setIsSavingFeedback] = useState(false);
   const [isSavingGeneralFeedback, setIsSavingGeneralFeedback] = useState(false);
   const [isSavingPassword, setIsSavingPassword] = useState(false);
@@ -153,6 +154,8 @@ function StudentExamApp() {
   const seenSyncBlockedRef = useRef(new Set());
   const autoSubmitTriggeredRef = useRef(false);
   const submitInProgressRef = useRef(false);
+  const answerSaveChainRef = useRef(Promise.resolve());
+  const answerSaveGenerationRef = useRef(0);
 
   const clearStoredSession = useCallback(() => {
     localStorage.removeItem(ACTIVE_SESSION_KEY);
@@ -424,6 +427,12 @@ function StudentExamApp() {
   }, [session?.sessionId]);
 
   useEffect(() => {
+    answerSaveGenerationRef.current += 1;
+    answerSaveChainRef.current = Promise.resolve();
+    setPendingAnswerSaves(0);
+  }, [session?.sessionId]);
+
+  useEffect(() => {
     if (!session || session.submittedAt) {
       clearStoredSession();
       return;
@@ -531,6 +540,93 @@ function StudentExamApp() {
     };
   }, [authToken, handleUnauthorized, resultReleaseInSeconds, resultsLocked, session?.sessionId]);
 
+  const enqueueAnswerSync = useCallback((task) => {
+    const generation = answerSaveGenerationRef.current;
+    setPendingAnswerSaves((current) => current + 1);
+
+    const nextPromise = answerSaveChainRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (answerSaveGenerationRef.current !== generation) {
+          return;
+        }
+        await task();
+      })
+      .finally(() => {
+        if (answerSaveGenerationRef.current === generation) {
+          setPendingAnswerSaves((current) => Math.max(0, current - 1));
+        }
+      });
+
+    answerSaveChainRef.current = nextPromise;
+    return nextPromise;
+  }, []);
+
+  const waitForPendingAnswerSaves = useCallback(async () => {
+    await answerSaveChainRef.current;
+  }, []);
+
+  const syncAnswerChange = useCallback(
+    async ({
+      token,
+      sessionId,
+      questionId,
+      selectedOptionIds,
+      questionIndex,
+      buildFallbackSelected,
+      defaultErrorMessage,
+      recoveryMessage = 'Session synced. Answer saved.',
+    }) => {
+      try {
+        await saveAnswer(token, sessionId, questionId, selectedOptionIds, questionIndex);
+      } catch (error) {
+        if (
+          buildFallbackSelected &&
+          error?.status === 400 &&
+          ['QUESTION_NOT_IN_SESSION', 'QUESTION_DETAILS_MISSING'].includes(error?.payload?.code)
+        ) {
+          try {
+            const latest = await fetchSession(token, sessionId);
+            const fallbackQuestion = latest?.questions?.[questionIndex] ?? null;
+            if (!fallbackQuestion?.id) {
+              setSession(latest);
+              return;
+            }
+
+            const fallbackSelected = buildFallbackSelected({ latest, fallbackQuestion });
+            const retry = await saveAnswer(
+              token,
+              latest.sessionId,
+              fallbackQuestion.id,
+              fallbackSelected,
+              questionIndex
+            );
+
+            setSession({
+              ...latest,
+              responses: retry?.responses ?? {
+                ...(latest.responses ?? {}),
+                [fallbackQuestion.id]: fallbackSelected,
+              },
+            });
+            setInfoMessage(recoveryMessage);
+            return;
+          } catch {
+            // fall through to standard error handling
+          }
+        }
+
+        if (!(await adoptSessionFromError(error)) && !handleUnauthorized(error)) {
+          setErrorMessage(error.message || defaultErrorMessage);
+        }
+
+        error.answerSyncFailed = true;
+        throw error;
+      }
+    },
+    [adoptSessionFromError, handleUnauthorized]
+  );
+
   const handleSubmit = useCallback(
     async (trigger = 'manual') => {
       if (!session || isSubmitting || !authToken) return;
@@ -545,6 +641,10 @@ function StudentExamApp() {
       setIsSubmitting(true);
       setErrorMessage('');
       try {
+        if (pendingAnswerSaves > 0) {
+          setInfoMessage('Syncing latest answers before submit...');
+        }
+        await waitForPendingAnswerSaves();
         const payload = await submitExam(authToken, session.sessionId);
         setSession(payload.session);
         setPhase('result');
@@ -552,6 +652,9 @@ function StudentExamApp() {
         void refreshDashboardSafely(authToken);
       } catch (error) {
         submitInProgressRef.current = false;
+        if (error?.answerSyncFailed) {
+          return;
+        }
         if (!(await adoptSessionFromError(error)) && !handleUnauthorized(error)) {
           setErrorMessage(error.message || 'Could not submit exam right now.');
         }
@@ -565,9 +668,11 @@ function StudentExamApp() {
       clearStoredSession,
       handleUnauthorized,
       isSubmitting,
+      pendingAnswerSaves,
       refreshDashboardSafely,
       submitConfirmArmed,
       session,
+      waitForPendingAnswerSaves,
     ]
   );
 
@@ -881,7 +986,7 @@ function StudentExamApp() {
   };
 
   const handlePickOption = (question, optionId) => {
-    if (!session || !authToken) return;
+    if (!session || !authToken || submitInProgressRef.current) return;
 
     const previous = session.responses[question.id] ?? [];
     const selected =
@@ -903,57 +1008,29 @@ function StudentExamApp() {
         : current
     );
 
-    void saveAnswer(authToken, session.sessionId, question.id, selected, currentIndex).catch(async (error) => {
-      if (
-        error?.status === 400 &&
-        ['QUESTION_NOT_IN_SESSION', 'QUESTION_DETAILS_MISSING'].includes(error?.payload?.code)
-      ) {
-        try {
-          const latest = await fetchSession(authToken, session.sessionId);
-          const fallbackQuestion = latest?.questions?.[currentIndex] ?? null;
-          if (!fallbackQuestion?.id) {
-            setSession(latest);
-            return;
-          }
-
+    const questionIndex = currentIndex;
+    void enqueueAnswerSync(() =>
+      syncAnswerChange({
+        token: authToken,
+        sessionId: session.sessionId,
+        questionId: question.id,
+        selectedOptionIds: selected,
+        questionIndex,
+        buildFallbackSelected: ({ latest, fallbackQuestion }) => {
           const latestPrevious = latest.responses?.[fallbackQuestion.id] ?? [];
-          const fallbackSelected =
-            fallbackQuestion.type === 'single'
-              ? [optionId]
-              : latestPrevious.includes(optionId)
-                ? latestPrevious.filter((id) => id !== optionId)
-                : [...latestPrevious, optionId];
-
-          const retry = await saveAnswer(
-            authToken,
-            latest.sessionId,
-            fallbackQuestion.id,
-            fallbackSelected,
-            currentIndex
-          );
-
-          setSession({
-            ...latest,
-            responses: retry?.responses ?? {
-              ...(latest.responses ?? {}),
-              [fallbackQuestion.id]: fallbackSelected,
-            },
-          });
-          setInfoMessage('Session synced. Answer saved.');
-          return;
-        } catch {
-          // fall through to standard error handling
-        }
-      }
-
-      if (!(await adoptSessionFromError(error)) && !handleUnauthorized(error)) {
-        setErrorMessage(error.message || 'Could not save answer.');
-      }
-    });
+          return fallbackQuestion.type === 'single'
+            ? [optionId]
+            : latestPrevious.includes(optionId)
+              ? latestPrevious.filter((id) => id !== optionId)
+              : [...latestPrevious, optionId];
+        },
+        defaultErrorMessage: 'Could not save answer.',
+      })
+    );
   };
 
   const handleClearAnswer = () => {
-    if (!session || !activeQuestion || !authToken) return;
+    if (!session || !activeQuestion || !authToken || submitInProgressRef.current) return;
 
     setSession((current) =>
       current
@@ -967,15 +1044,23 @@ function StudentExamApp() {
         : current
     );
 
-    void saveAnswer(authToken, session.sessionId, activeQuestion.id, [], currentIndex).catch(async (error) => {
-      if (!(await adoptSessionFromError(error)) && !handleUnauthorized(error)) {
-        setErrorMessage(error.message || 'Could not clear answer.');
-      }
-    });
+    const questionIndex = currentIndex;
+    void enqueueAnswerSync(() =>
+      syncAnswerChange({
+        token: authToken,
+        sessionId: session.sessionId,
+        questionId: activeQuestion.id,
+        selectedOptionIds: [],
+        questionIndex,
+        buildFallbackSelected: () => [],
+        defaultErrorMessage: 'Could not clear answer.',
+        recoveryMessage: 'Session synced. Answer cleared.',
+      })
+    );
   };
 
   const handleToggleFlag = () => {
-    if (!session || !activeQuestion || !authToken) return;
+    if (!session || !activeQuestion || !authToken || submitInProgressRef.current) return;
 
     const nextFlagged = !session.flagged[activeQuestion.id];
     setSession((current) =>
@@ -2111,6 +2196,13 @@ function StudentExamApp() {
             <strong>{unansweredCount}</strong>
           </div>
 
+          {pendingAnswerSaves > 0 && (
+            <div className="stat-pill syncing">
+              <span>Pending Saves</span>
+              <strong>{pendingAnswerSaves}</strong>
+            </div>
+          )}
+
           <button type="button" className="btn btn-outline" onClick={startExamFullscreen}>
             {isFullscreen ? 'Fullscreen Active' : 'Go Full Screen'}
           </button>
@@ -2119,8 +2211,15 @@ function StudentExamApp() {
             type="button"
             className={`btn ${submitConfirmArmed ? 'btn-warning' : 'btn-danger'}`}
             onClick={() => void handleSubmit('manual')}
+            disabled={isSubmitting}
           >
-            {isSubmitting ? 'Submitting...' : submitConfirmArmed ? 'Confirm Submit' : 'Submit Exam'}
+            {isSubmitting
+              ? pendingAnswerSaves > 0
+                ? 'Syncing...'
+                : 'Submitting...'
+              : submitConfirmArmed
+                ? 'Confirm Submit'
+                : 'Submit Exam'}
           </button>
         </div>
       </header>
@@ -2147,6 +2246,7 @@ function StudentExamApp() {
                   type={controlType}
                   name={activeQuestion.id}
                   checked={chosen}
+                  disabled={isSubmitting}
                   onChange={() => handlePickOption(activeQuestion, option.id)}
                 />
                 <span className="option-label">
@@ -2162,12 +2262,12 @@ function StudentExamApp() {
             type="button"
             className="btn btn-secondary"
             onClick={() => setCurrentIndex((index) => Math.max(0, index - 1))}
-            disabled={currentIndex === 0}
+            disabled={isSubmitting || currentIndex === 0}
           >
             Previous
           </button>
 
-          <button type="button" className="btn btn-outline" onClick={handleClearAnswer}>
+          <button type="button" className="btn btn-outline" onClick={handleClearAnswer} disabled={isSubmitting}>
             Clear Answer
           </button>
 
@@ -2175,6 +2275,7 @@ function StudentExamApp() {
             type="button"
             className={`btn ${flagged[activeQuestion?.id] ? 'btn-warning' : 'btn-outline'}`}
             onClick={handleToggleFlag}
+            disabled={isSubmitting}
           >
             {flagged[activeQuestion?.id] ? 'Unflag' : 'Flag'}
           </button>
@@ -2183,7 +2284,7 @@ function StudentExamApp() {
             type="button"
             className="btn btn-primary"
             onClick={() => setCurrentIndex((index) => Math.min((session?.questions.length ?? 1) - 1, index + 1))}
-            disabled={currentIndex >= (session?.questions.length ?? 1) - 1}
+            disabled={isSubmitting || currentIndex >= (session?.questions.length ?? 1) - 1}
           >
             Next
           </button>
@@ -2207,6 +2308,7 @@ function StudentExamApp() {
                 type="button"
                 className={`palette-btn ${status} ${isCurrent ? 'current' : ''}`}
                 onClick={() => setCurrentIndex(index)}
+                disabled={isSubmitting}
               >
                 {index + 1}
               </button>

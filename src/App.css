@@ -191,6 +191,11 @@ body {
   font-size: 0.92rem;
 }
 
+.stat-pill.syncing {
+  background: #fff4d6;
+  border-color: #f0c36a;
+}
+
 .question-area {
   flex: 1;
   overflow-y: auto;

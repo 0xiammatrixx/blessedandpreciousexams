@@ -787,6 +787,77 @@ async function getUpdatableSessionOrError(sessionId, res, studentUser = null) {
   return session;
 }
 
+async function applyActiveSessionUpdateOrError(sessionId, res, studentUser, updater) {
+  let rejectedResponse = null;
+
+  const updated = await updateSession(sessionId, (current) => {
+    if (studentUser && !studentOwnsSession(studentUser, current)) {
+      rejectedResponse = {
+        status: 403,
+        payload: { error: 'You do not have access to this session.' },
+      };
+      return null;
+    }
+
+    if (current.submittedAt) {
+      rejectedResponse = {
+        status: 409,
+        payload: { error: 'Exam already submitted.', session: toStudentClientSession(current) },
+      };
+      return null;
+    }
+
+    if (Date.now() >= current.expiresAt) {
+      const finalized = finalizeSession(current);
+      rejectedResponse = {
+        status: 409,
+        payload: { error: 'Exam time is over.', session: toStudentClientSession(finalized) },
+      };
+      return finalized;
+    }
+
+    return updater(current);
+  });
+
+  if (rejectedResponse) {
+    res.status(rejectedResponse.status).json(rejectedResponse.payload);
+    return null;
+  }
+
+  if (updated) {
+    return updated;
+  }
+
+  const latest = await getLatestSession(sessionId);
+  if (!latest) {
+    res.status(404).json({ error: 'Session not found.' });
+    return null;
+  }
+
+  if (studentUser && !studentOwnsSession(studentUser, latest)) {
+    res.status(403).json({ error: 'You do not have access to this session.' });
+    return null;
+  }
+
+  if (latest.submittedAt) {
+    res.status(409).json({ error: 'Exam already submitted.', session: toStudentClientSession(latest) });
+    return null;
+  }
+
+  if (Date.now() >= latest.expiresAt) {
+    const finalized = finalizeSession(latest);
+    await saveSession(finalized);
+    res.status(409).json({ error: 'Exam time is over.', session: toStudentClientSession(finalized) });
+    return null;
+  }
+
+  res.status(409).json({
+    error: 'Could not update session right now. Please retry.',
+    session: toStudentClientSession(latest),
+  });
+  return null;
+}
+
 async function cleanupAdminTokens() {
   await cleanupExpiredAdminTokens(Date.now());
 }
@@ -2351,13 +2422,16 @@ app.post('/api/exam/:sessionId/seen', requireStudent, async (req, res) => {
     return;
   }
 
-  const updated = await updateSession(sessionId, (current) => ({
+  const updated = await applyActiveSessionUpdateOrError(sessionId, res, req.student.user, (current) => ({
     ...current,
     seen: {
       ...current.seen,
       [questionId]: true,
     },
   }));
+  if (!updated) {
+    return;
+  }
 
   res.json({ ok: true, seen: updated?.seen ?? session.seen });
 });
@@ -2407,7 +2481,7 @@ app.post('/api/exam/:sessionId/answer', requireStudent, async (req, res) => {
 
   const selected = sanitizeSelectedOptions(question, req.body?.selectedOptionIds);
 
-  const updated = await updateSession(sessionId, (current) => ({
+  const updated = await applyActiveSessionUpdateOrError(sessionId, res, req.student.user, (current) => ({
     ...current,
     questionSnapshot: {
       ...(current.questionSnapshot ?? {}),
@@ -2418,6 +2492,9 @@ app.post('/api/exam/:sessionId/answer', requireStudent, async (req, res) => {
       [questionId]: selected,
     },
   }));
+  if (!updated) {
+    return;
+  }
 
   res.json({ ok: true, responses: updated?.answers ?? session.answers });
 });
@@ -2450,13 +2527,16 @@ app.post('/api/exam/:sessionId/flag', requireStudent, async (req, res) => {
     return;
   }
 
-  const updated = await updateSession(sessionId, (current) => ({
+  const updated = await applyActiveSessionUpdateOrError(sessionId, res, req.student.user, (current) => ({
     ...current,
     flagged: {
       ...current.flagged,
       [questionId]: flagged,
     },
   }));
+  if (!updated) {
+    return;
+  }
 
   res.json({ ok: true, flagged: updated?.flagged ?? session.flagged });
 });
@@ -2489,10 +2569,13 @@ app.post('/api/exam/:sessionId/proctor', requireStudent, async (req, res) => {
     waivedAt: null,
   };
 
-  const updated = await updateSession(sessionId, (current) => ({
+  const updated = await applyActiveSessionUpdateOrError(sessionId, res, req.student.user, (current) => ({
     ...current,
     violations: [...current.violations, violation],
   }));
+  if (!updated) {
+    return;
+  }
 
   res.json({
     ok: true,
@@ -2503,20 +2586,15 @@ app.post('/api/exam/:sessionId/proctor', requireStudent, async (req, res) => {
 
 app.post('/api/exam/:sessionId/submit', requireStudent, async (req, res) => {
   const sessionId = req.params.sessionId;
-  const latest = await getLatestSession(sessionId);
-
-  if (!latest) {
-    res.status(404).json({ error: 'Session not found.' });
+  const finalized = await applyActiveSessionUpdateOrError(
+    sessionId,
+    res,
+    req.student.user,
+    (current) => finalizeSession(current)
+  );
+  if (!finalized) {
     return;
   }
-
-  if (!studentOwnsSession(req.student.user, latest)) {
-    res.status(403).json({ error: 'You do not have access to this session.' });
-    return;
-  }
-
-  const finalized = finalizeSession(latest);
-  await saveSession(finalized);
 
   res.json({
     ok: true,

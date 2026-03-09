@@ -178,6 +178,12 @@ function buildStudentApi(baseUrl, token) {
         json: payload,
       });
     },
+    fetchSession(sessionId) {
+      return requestJson(baseUrl, `/api/exam/${encodeURIComponent(sessionId)}`, {
+        method: 'GET',
+        headers: withStudentHeaders(token),
+      });
+    },
     markSeen(sessionId, payload) {
       return requestJson(baseUrl, `/api/exam/${encodeURIComponent(sessionId)}/seen`, {
         method: 'POST',
@@ -323,6 +329,7 @@ async function main() {
     RESULT_RELEASE_DELAY_MS: '0',
     KEEP_ALIVE_ENABLED: 'false',
     MONGO_DNS_SERVERS: mongoDnsServers,
+    SESSION_UPDATE_DELAY_MS: '60',
   };
 
   let child = null;
@@ -450,6 +457,27 @@ async function main() {
     assert(typeof started.sessionId === 'string', 'Session ID missing from start response.');
     assert(Array.isArray(started.questions) && started.questions.length === 40, 'Expected 40 questions on start.');
     printStep(`Session started: ${started.sessionId} (${started.exam?.title ?? selectedExam.title})`);
+
+    const concurrentQuestions = started.questions.slice(5, 7);
+    assert(concurrentQuestions.length === 2, 'Need at least two questions for concurrent save test.');
+    await Promise.all(
+      concurrentQuestions.map((question, index) =>
+        examApi.saveAnswer(started.sessionId, {
+          questionId: question.id,
+          questionIndex: index + 5,
+          selectedOptionIds: [question.options[0].id],
+        })
+      )
+    );
+    const afterConcurrentSaves = await examApi.fetchSession(started.sessionId);
+    for (const question of concurrentQuestions) {
+      const savedAnswer = afterConcurrentSaves?.responses?.[question.id] ?? [];
+      assert(
+        savedAnswer.length === 1 && savedAnswer[0] === question.options[0].id,
+        `Concurrent save lost the answer for question ${question.id}.`
+      );
+    }
+    printStep('Concurrent answer writes retained all responses');
 
     const targetQuestions = started.questions.slice(0, 5);
     for (let index = 0; index < targetQuestions.length; index += 1) {
