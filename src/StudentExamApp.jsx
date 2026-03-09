@@ -25,6 +25,12 @@ const ACTIVE_SESSION_KEY = 'salem_exam_active_session';
 const ACTIVE_INDEX_KEY = 'salem_exam_active_index';
 const STUDENT_TOKEN_KEY = 'salem_student_token';
 const STUDENT_TOKEN_EXPIRES_KEY = 'salem_student_token_expires_at';
+const STUDENT_IDLE_TIMEOUT_MS_INPUT = Number(import.meta.env.VITE_STUDENT_IDLE_TIMEOUT_MS ?? 3 * 60 * 1000);
+const STUDENT_IDLE_TIMEOUT_MS =
+  Number.isFinite(STUDENT_IDLE_TIMEOUT_MS_INPUT) && STUDENT_IDLE_TIMEOUT_MS_INPUT >= 30_000
+    ? Math.round(STUDENT_IDLE_TIMEOUT_MS_INPUT)
+    : 3 * 60 * 1000;
+const STUDENT_IDLE_TIMEOUT_MINUTES = Math.max(1, Math.round(STUDENT_IDLE_TIMEOUT_MS / 60_000));
 
 const TOUR_STEPS = [
   {
@@ -97,15 +103,22 @@ function StudentExamApp() {
   const [dashboard, setDashboard] = useState(null);
 
   const [authMode, setAuthMode] = useState('login');
-  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
+  const [loginForm, setLoginForm] = useState({ identifier: '', password: '' });
   const [registerForm, setRegisterForm] = useState({
     fullName: '',
     classRoom: '',
     email: '',
+    username: '',
     password: '',
     confirmPassword: '',
   });
-  const [helpForm, setHelpForm] = useState({ fullName: '', classRoom: '', email: '', message: '' });
+  const [helpForm, setHelpForm] = useState({
+    fullName: '',
+    classRoom: '',
+    email: '',
+    username: '',
+    message: '',
+  });
   const [changePasswordForm, setChangePasswordForm] = useState({
     currentPassword: '',
     newPassword: '',
@@ -272,7 +285,7 @@ function StudentExamApp() {
           if (next?.user) {
             setLoginForm((prev) => ({
               ...prev,
-              email: next.user.email ?? '',
+              identifier: next.user.email || next.user.username || '',
               password: '',
             }));
             setRegisterForm((prev) => ({
@@ -280,6 +293,7 @@ function StudentExamApp() {
               fullName: next.user.fullName ?? '',
               classRoom: next.user.classRoom ?? '',
               email: next.user.email ?? '',
+              username: next.user.username ?? '',
               password: '',
               confirmPassword: '',
             }));
@@ -288,6 +302,7 @@ function StudentExamApp() {
               fullName: next.user.fullName ?? '',
               classRoom: next.user.classRoom ?? '',
               email: next.user.email ?? '',
+              username: next.user.username ?? '',
             }));
           }
 
@@ -330,6 +345,61 @@ function StudentExamApp() {
       alive = false;
     };
   }, [applyServerSession, clearAuth, clearStoredSession, handleUnauthorized, refreshDashboard, storeToken]);
+
+  useEffect(() => {
+    if (!authToken || !Number.isFinite(authExpiresAt) || authExpiresAt <= 0) {
+      return undefined;
+    }
+
+    const timeoutMs = authExpiresAt - Date.now();
+    if (timeoutMs <= 0) {
+      clearAuth();
+      setPhase('setup');
+      setErrorMessage('Your session timed out. Please login again.');
+      return undefined;
+    }
+
+    const timeoutId = setTimeout(() => {
+      clearAuth();
+      setPhase('setup');
+      setErrorMessage('Your session timed out. Please login again.');
+    }, timeoutMs);
+
+    return () => clearTimeout(timeoutId);
+  }, [authExpiresAt, authToken, clearAuth]);
+
+  useEffect(() => {
+    const shouldTrackIdle = Boolean(authToken) && (phase === 'setup' || phase === 'result');
+    if (!shouldTrackIdle) {
+      return undefined;
+    }
+
+    let timeoutId;
+    const handleIdleTimeout = () => {
+      clearAuth();
+      setPhase('setup');
+      setErrorMessage(`Logged out after ${STUDENT_IDLE_TIMEOUT_MINUTES} minute(s) of inactivity.`);
+    };
+
+    const resetIdleTimer = () => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(handleIdleTimeout, STUDENT_IDLE_TIMEOUT_MS);
+    };
+
+    const events = ['pointerdown', 'keydown', 'mousemove', 'touchstart', 'scroll'];
+    for (const eventName of events) {
+      window.addEventListener(eventName, resetIdleTimer, { passive: true });
+    }
+
+    resetIdleTimer();
+
+    return () => {
+      clearTimeout(timeoutId);
+      for (const eventName of events) {
+        window.removeEventListener(eventName, resetIdleTimer);
+      }
+    };
+  }, [authToken, clearAuth, phase]);
 
   useEffect(() => {
     if (!infoMessage) return undefined;
@@ -394,6 +464,8 @@ function StudentExamApp() {
   const leaderboardClassTop = dashboard?.leaderboards?.classTop ?? [];
   const currentLeaderboard = dashboard?.leaderboards?.currentStudent ?? null;
   const generalFeedbackHistory = dashboard?.generalFeedbackHistory ?? [];
+  const dashboardContact = dashboard?.user?.email || (dashboard?.user?.username ? `@${dashboard.user.username}` : '-');
+  const sessionContact = session?.student?.email || (session?.student?.username ? `@${session.student.username}` : '-');
   const resultsLocked = Boolean(session?.submittedAt && session?.resultsReleased === false);
   const resultReleaseInSeconds =
     resultsLocked && session?.resultsAvailableAt
@@ -648,7 +720,7 @@ function StudentExamApp() {
 
     try {
       const payload = await studentLogin({
-        email: loginForm.email,
+        identifier: loginForm.identifier,
         password: loginForm.password,
       });
       storeToken(payload.token, payload.expiresAt);
@@ -668,13 +740,15 @@ function StudentExamApp() {
         ...prev,
         fullName: payload.user?.fullName ?? prev.fullName,
         classRoom: payload.user?.classRoom ?? prev.classRoom,
-        email: payload.user?.email ?? loginForm.email,
+        email: payload.user?.email ?? prev.email,
+        username: payload.user?.username ?? prev.username,
       }));
       setRegisterForm((prev) => ({
         ...prev,
         fullName: payload.user?.fullName ?? prev.fullName,
         classRoom: payload.user?.classRoom ?? prev.classRoom,
         email: payload.user?.email ?? prev.email,
+        username: payload.user?.username ?? prev.username,
         password: '',
         confirmPassword: '',
       }));
@@ -696,6 +770,10 @@ function StudentExamApp() {
 
   const handleRegister = async (event) => {
     event.preventDefault();
+    if (!registerForm.email && !registerForm.username) {
+      setErrorMessage('Provide at least an email or a username.');
+      return;
+    }
     if (registerForm.password !== registerForm.confirmPassword) {
       setErrorMessage('Password and confirmation do not match.');
       return;
@@ -709,6 +787,7 @@ function StudentExamApp() {
         fullName: registerForm.fullName,
         classRoom: registerForm.classRoom,
         email: registerForm.email,
+        username: registerForm.username,
         password: registerForm.password,
       });
       storeToken(payload.token, payload.expiresAt);
@@ -731,9 +810,10 @@ function StudentExamApp() {
         fullName: payload.user?.fullName ?? registerForm.fullName,
         classRoom: payload.user?.classRoom ?? registerForm.classRoom,
         email: payload.user?.email ?? registerForm.email,
+        username: payload.user?.username ?? registerForm.username,
       }));
       setLoginForm({
-        email: payload.user?.email ?? registerForm.email,
+        identifier: payload.user?.email || payload.user?.username || registerForm.email || registerForm.username,
         password: '',
       });
       setRegisterForm((prev) => ({
@@ -996,6 +1076,11 @@ function StudentExamApp() {
 
   const handleSendPasswordHelp = async (event) => {
     event.preventDefault();
+    if (!helpForm.email && !helpForm.username) {
+      setErrorMessage('Provide at least an email or username for contact.');
+      return;
+    }
+
     setErrorMessage('');
     setIsSendingHelp(true);
 
@@ -1149,7 +1234,7 @@ function StudentExamApp() {
         <main className="center-screen">
           <div className="card-panel wide">
             <h1>Salem Academy CBT</h1>
-            <p className="muted">Login with email and password, or register a new student account.</p>
+            <p className="muted">Login with email/username and password, or register a new student account.</p>
 
             <div className="inline-actions">
               <button
@@ -1170,13 +1255,13 @@ function StudentExamApp() {
 
             {authMode === 'login' ? (
               <form onSubmit={handleLogin} className="form-stack">
-                <label htmlFor="email">Email</label>
+                <label htmlFor="identifier">Email or Username</label>
                 <input
-                  id="email"
-                  type="email"
+                  id="identifier"
+                  type="text"
                   required
-                  value={loginForm.email}
-                  onChange={(event) => setLoginForm((prev) => ({ ...prev, email: event.target.value }))}
+                  value={loginForm.identifier}
+                  onChange={(event) => setLoginForm((prev) => ({ ...prev, identifier: event.target.value }))}
                 />
 
                 <label htmlFor="password">Password</label>
@@ -1220,14 +1305,23 @@ function StudentExamApp() {
                   ))}
                 </select>
 
-                <label htmlFor="registerEmail">Email</label>
+                <label htmlFor="registerEmail">Email (Optional)</label>
                 <input
                   id="registerEmail"
                   type="email"
-                  required
                   value={registerForm.email}
                   onChange={(event) => setRegisterForm((prev) => ({ ...prev, email: event.target.value }))}
                 />
+
+                <label htmlFor="registerUsername">Username (Optional)</label>
+                <input
+                  id="registerUsername"
+                  type="text"
+                  value={registerForm.username}
+                  onChange={(event) => setRegisterForm((prev) => ({ ...prev, username: event.target.value }))}
+                />
+
+                <p className="muted">Provide at least one: email or username.</p>
 
                 <label htmlFor="registerPassword">Password</label>
                 <input
@@ -1288,13 +1382,20 @@ function StudentExamApp() {
                   ))}
                 </select>
 
-                <label htmlFor="helpEmail">Email</label>
+                <label htmlFor="helpEmail">Email (Optional)</label>
                 <input
                   id="helpEmail"
                   type="email"
-                  required
                   value={helpForm.email}
                   onChange={(event) => setHelpForm((prev) => ({ ...prev, email: event.target.value }))}
+                />
+
+                <label htmlFor="helpUsername">Username (Optional)</label>
+                <input
+                  id="helpUsername"
+                  type="text"
+                  value={helpForm.username}
+                  onChange={(event) => setHelpForm((prev) => ({ ...prev, username: event.target.value }))}
                 />
 
                 <label htmlFor="helpMessage">Message (Optional)</label>
@@ -1320,7 +1421,7 @@ function StudentExamApp() {
         <div className="card-panel wide">
           <h1>Student Dashboard</h1>
           <p>
-            <strong>{dashboard?.user?.fullName}</strong> | {dashboard?.user?.classRoom} | {dashboard?.user?.email}
+            <strong>{dashboard?.user?.fullName}</strong> | {dashboard?.user?.classRoom} | {dashboardContact}
           </p>
           <p className="muted">
             Session expires: <strong>{formatDateTime(authExpiresAt)}</strong>
@@ -1755,7 +1856,7 @@ function StudentExamApp() {
               {session?.exam?.maxAttempts ? `/${session.exam.maxAttempts}` : ''}
             </strong>
           </p>
-          <p className="muted">Results will be sent to {session?.student.email} before end of day.</p>
+          <p className="muted">Contact for results: {sessionContact}</p>
 
           <ul className="rules-list">
             <li>Total questions: {session?.questions?.length ?? meta?.questionCount ?? 40}</li>
@@ -1850,7 +1951,7 @@ function StudentExamApp() {
           )}
 
           <p className="muted">
-            Results will be sent to <strong>{session.student.email}</strong> before end of day.
+            Contact for results: <strong>{sessionContact}</strong>
           </p>
 
           <div className="feedback-panel">

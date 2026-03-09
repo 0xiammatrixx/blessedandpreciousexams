@@ -15,12 +15,14 @@ paths:
           application/json:
             schema:
               type: object
-              required: [fullName, classRoom, email, password]
+              required: [fullName, classRoom, password]
               properties:
                 fullName: { type: string }
                 classRoom: { type: string }
                 email: { type: string, format: email }
+                username: { type: string, description: "3-32 chars: a-z, 0-9, dot, underscore, hyphen" }
                 password: { type: string, minLength: 4 }
+              description: Provide at least one of `email` or `username`.
       responses:
         '201':
           description: Registered and logged in
@@ -36,9 +38,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [email, password]
+              required: [password]
               properties:
-                email: { type: string, format: email }
+                identifier: { type: string, description: "Email or username" }
+                email: { type: string, format: email, deprecated: true }
+                username: { type: string, deprecated: true }
                 password: { type: string }
       responses:
         '200':

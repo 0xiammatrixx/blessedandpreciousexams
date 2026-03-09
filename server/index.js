@@ -22,6 +22,7 @@ import {
   getUserByEmail,
   getUserById,
   getUserByKey,
+  getUserByUsername,
   listPasswordAssistanceRequests,
   listUsers,
   resolvePasswordAssistanceRequest,
@@ -122,6 +123,22 @@ function normalizeEmail(value) {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
+function normalizeUsername(value) {
+  return typeof value === 'string'
+    ? value.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 32)
+    : '';
+}
+
+function formatStudentContact(email, username) {
+  const normalizedEmail = normalizeEmail(email);
+  if (normalizedEmail) {
+    return normalizedEmail;
+  }
+
+  const normalizedUsername = normalizeUsername(username);
+  return normalizedUsername ? `@${normalizedUsername}` : '';
+}
+
 function toTitleCaseWords(value) {
   const normalized = normalizeName(value);
   if (!normalized) {
@@ -176,8 +193,10 @@ function buildStudentKey(student, examId = '') {
   const fullName = normalizeName(student?.fullName).toLowerCase();
   const classRoom = normalizeName(student?.classRoom).toLowerCase();
   const email = normalizeEmail(student?.email);
+  const username = normalizeUsername(student?.username);
+  const identity = email || (username ? `@${username}` : '');
   const safeExamId = normalizeExamId(examId || student?.examId || '');
-  return `${fullName}|${classRoom}|${email}|${safeExamId}`;
+  return `${fullName}|${classRoom}|${identity}|${safeExamId}`;
 }
 
 function normalizeStoredViolation(value) {
@@ -221,6 +240,10 @@ function getWaivedViolations(session) {
 
 function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value);
+}
+
+function isValidUsername(value) {
+  return /^[a-z0-9._-]{3,32}$/.test(normalizeUsername(value));
 }
 
 function sanitizeRating(value) {
@@ -618,6 +641,7 @@ async function normalizeSession(session) {
     fullName: normalizeName(session.student?.fullName ?? ''),
     classRoom: normalizeName(session.student?.classRoom ?? ''),
     email: normalizeEmail(session.student?.email ?? ''),
+    username: normalizeUsername(session.student?.username ?? ''),
   };
   const normalizedExamId = normalizeExamId(session.examId) || 'general';
   const matchingExam = await getExam(normalizedExamId);
@@ -670,6 +694,7 @@ async function normalizeSession(session) {
     normalizedStudent.fullName !== (session.student?.fullName ?? '') ||
     normalizedStudent.classRoom !== (session.student?.classRoom ?? '') ||
     normalizedStudent.email !== (session.student?.email ?? '') ||
+    normalizedStudent.username !== (session.student?.username ?? '') ||
     normalizedExamId !== (session.examId ?? '') ||
     examTitle !== (session.examTitle ?? '') ||
     examMaxAttempts !== session.examMaxAttempts ||
@@ -925,7 +950,8 @@ function toSessionRow(session) {
     studentKey: session.studentKey ?? buildStudentKey(session.student, session.examId),
     studentName: session.student?.fullName ?? 'Unknown',
     classRoom: session.student?.classRoom ?? 'Unknown',
-    email: session.student?.email ?? '',
+    email: formatStudentContact(session.student?.email, session.student?.username),
+    username: session.student?.username ?? '',
     startedAt: session.startedAt,
     submittedAt: session.submittedAt,
     expiresAt: session.expiresAt,
@@ -1351,6 +1377,8 @@ function buildReportCardPayload(session, branding, includeCorrectAnswers = false
       fullName: toTitleCaseWords(session.student?.fullName || ''),
       classRoom: session.student?.classRoom || 'Unknown',
       email: session.student?.email || '',
+      username: session.student?.username || '',
+      contact: formatStudentContact(session.student?.email, session.student?.username) || '-',
     },
     exam: {
       id: session.examId ?? 'general',
@@ -1431,6 +1459,7 @@ function renderReportCardHtml(payload) {
     <section class="meta">
       <div><strong>Student:</strong> ${studentName}</div>
       <div><strong>Class:</strong> ${classRoom}</div>
+      <div><strong>Contact:</strong> ${escapeHtml(payload.student.contact || '-')}</div>
       <div><strong>Session ID:</strong> ${sessionId}</div>
       <div><strong>Submitted:</strong> ${escapeHtml(formatDateForReport(payload.submittedAt))}</div>
       <div><strong>Started:</strong> ${escapeHtml(formatDateForReport(payload.startedAt))}</div>
@@ -1820,6 +1849,7 @@ app.post('/api/student/register', async (req, res) => {
   const fullName = normalizeName(req.body?.fullName);
   const classRoom = normalizeName(req.body?.classRoom);
   const email = normalizeEmail(req.body?.email);
+  const username = normalizeUsername(req.body?.username);
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
 
   if (fullName.length < 5) {
@@ -1832,8 +1862,20 @@ app.post('/api/student/register', async (req, res) => {
     return;
   }
 
-  if (!isValidEmail(email)) {
+  if (!email && !username) {
+    res.status(400).json({ error: 'Provide at least an email or a username.' });
+    return;
+  }
+
+  if (email && !isValidEmail(email)) {
     res.status(400).json({ error: 'Please enter a valid email address.' });
+    return;
+  }
+
+  if (username && !isValidUsername(username)) {
+    res.status(400).json({
+      error: 'Username must be 3-32 characters and use letters, numbers, dot, underscore, or hyphen.',
+    });
     return;
   }
 
@@ -1844,12 +1886,17 @@ app.post('/api/student/register', async (req, res) => {
 
   let user;
   try {
-    user = await createUserWithPassword({ fullName, classRoom, email }, password, {
+    user = await createUserWithPassword({ fullName, classRoom, email, username }, password, {
       mustChangePassword: false,
     });
   } catch (error) {
     if (error?.code === 'EMAIL_ALREADY_EXISTS') {
       res.status(409).json({ error: 'An account with this email already exists. Please login instead.' });
+      return;
+    }
+
+    if (error?.code === 'USERNAME_ALREADY_EXISTS') {
+      res.status(409).json({ error: 'An account with this username already exists. Please login instead.' });
       return;
     }
 
@@ -1884,11 +1931,26 @@ app.post('/api/student/register', async (req, res) => {
 });
 
 app.post('/api/student/login', async (req, res) => {
-  const email = normalizeEmail(req.body?.email);
+  const identifier = normalizeName(req.body?.identifier ?? req.body?.email ?? req.body?.username);
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
 
-  if (!isValidEmail(email)) {
+  if (!identifier) {
+    res.status(400).json({ error: 'Enter your email or username.' });
+    return;
+  }
+
+  const asEmail = normalizeEmail(identifier);
+  const asUsername = normalizeUsername(identifier);
+  const looksLikeEmail = identifier.includes('@');
+  if (looksLikeEmail && !isValidEmail(asEmail)) {
     res.status(400).json({ error: 'Please enter a valid email address.' });
+    return;
+  }
+
+  if (!looksLikeEmail && !isValidUsername(asUsername)) {
+    res.status(400).json({
+      error: 'Username must be 3-32 characters and use letters, numbers, dot, underscore, or hyphen.',
+    });
     return;
   }
 
@@ -1897,9 +1959,9 @@ app.post('/api/student/login', async (req, res) => {
     return;
   }
 
-  const user = await getUserByEmail(email);
+  const user = looksLikeEmail ? await getUserByEmail(asEmail) : await getUserByUsername(asUsername);
   if (!user) {
-    res.status(404).json({ error: 'No account found for this email. Please register first.' });
+    res.status(404).json({ error: 'No account found for this email/username. Please register first.' });
     return;
   }
 
@@ -2020,6 +2082,7 @@ app.post('/api/student/password-help', async (req, res) => {
   const fullName = normalizeName(req.body?.fullName);
   const classRoom = normalizeName(req.body?.classRoom);
   const email = normalizeEmail(req.body?.email);
+  const username = normalizeUsername(req.body?.username);
   const message = normalizeName(req.body?.message ?? '');
 
   if (fullName.length < 5) {
@@ -2032,8 +2095,20 @@ app.post('/api/student/password-help', async (req, res) => {
     return;
   }
 
-  if (!isValidEmail(email)) {
+  if (!email && !username) {
+    res.status(400).json({ error: 'Provide at least an email or username for contact.' });
+    return;
+  }
+
+  if (email && !isValidEmail(email)) {
     res.status(400).json({ error: 'Please enter a valid email address.' });
+    return;
+  }
+
+  if (username && !isValidUsername(username)) {
+    res.status(400).json({
+      error: 'Username must be 3-32 characters and use letters, numbers, dot, underscore, or hyphen.',
+    });
     return;
   }
 
@@ -2041,6 +2116,7 @@ app.post('/api/student/password-help', async (req, res) => {
     fullName,
     classRoom,
     email,
+    username,
     message,
   });
 
@@ -2120,6 +2196,7 @@ app.post('/api/exam/start', requireStudent, async (req, res) => {
   const fullName = user.fullName;
   const classRoom = user.classRoom;
   const email = user.email;
+  const username = normalizeUsername(user.username ?? '');
 
   const [selectedExam, questionPool, questionMap, sessions] = await Promise.all([
     getExam(requestedExamId),
@@ -2187,6 +2264,7 @@ app.post('/api/exam/start', requireStudent, async (req, res) => {
       fullName,
       classRoom,
       email,
+      username,
     },
     selectedExam.id
   );
@@ -2205,6 +2283,7 @@ app.post('/api/exam/start', requireStudent, async (req, res) => {
       fullName,
       classRoom,
       email,
+      username,
     },
     startedAt,
     expiresAt: startedAt + selectedExam.durationSeconds * 1000,
@@ -2999,7 +3078,7 @@ app.get('/api/admin/users', requireAdmin, async (req, res) => {
         return true;
       }
 
-      const haystack = `${row.fullName} ${row.email} ${row.userKey}`.toLowerCase();
+      const haystack = `${row.fullName} ${row.email} ${row.username ?? ''} ${row.userKey}`.toLowerCase();
       return haystack.includes(search);
     })
     .sort((left, right) => {
@@ -3043,11 +3122,21 @@ app.patch('/api/admin/users/:userId', requireAdmin, async (req, res) => {
   }
   if (req.body?.email !== undefined) {
     const email = normalizeEmail(req.body.email);
-    if (!isValidEmail(email)) {
+    if (email && !isValidEmail(email)) {
       res.status(400).json({ error: 'Please provide a valid email.' });
       return;
     }
     patch.email = email;
+  }
+  if (req.body?.username !== undefined) {
+    const username = normalizeUsername(req.body.username);
+    if (username && !isValidUsername(username)) {
+      res.status(400).json({
+        error: 'Username must be 3-32 characters and use letters, numbers, dot, underscore, or hyphen.',
+      });
+      return;
+    }
+    patch.username = username;
   }
   if (req.body?.disabled !== undefined) {
     patch.disabled = Boolean(req.body.disabled);
@@ -3127,7 +3216,8 @@ app.get('/api/admin/password-help', requireAdmin, async (req, res) => {
         return true;
       }
 
-      const haystack = `${row.fullName} ${row.classRoom} ${row.email} ${row.message}`.toLowerCase();
+      const haystack =
+        `${row.fullName} ${row.classRoom} ${row.email ?? ''} ${row.username ?? ''} ${row.message}`.toLowerCase();
       return haystack.includes(search);
     })
     .sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0));

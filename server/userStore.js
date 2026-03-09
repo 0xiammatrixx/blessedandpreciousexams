@@ -15,6 +15,11 @@ function normalizeEmail(value) {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
+function normalizeUsername(value) {
+  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return text.replace(/[^a-z0-9._-]/g, '').slice(0, 32);
+}
+
 function stripMongoId(value) {
   if (!value || typeof value !== 'object') {
     return value;
@@ -24,8 +29,11 @@ function stripMongoId(value) {
   return rest;
 }
 
-export function buildUserKey({ fullName, classRoom, email }) {
-  return `${normalizeText(fullName).toLowerCase()}|${normalizeText(classRoom).toLowerCase()}|${normalizeEmail(email)}`;
+export function buildUserKey({ fullName, classRoom, email, username }) {
+  const emailPart = normalizeEmail(email);
+  const usernamePart = normalizeUsername(username);
+  const identityPart = emailPart || (usernamePart ? `@${usernamePart}` : '');
+  return `${normalizeText(fullName).toLowerCase()}|${normalizeText(classRoom).toLowerCase()}|${identityPart}`;
 }
 
 export function defaultPasswordFromName(fullName) {
@@ -45,6 +53,7 @@ async function ensureInitialized() {
   await users.createIndex({ id: 1 }, { unique: true, name: 'idx_user_id' });
   await users.createIndex({ userKey: 1 }, { unique: true, name: 'idx_user_key' });
   await users.createIndex({ email: 1 }, { name: 'idx_user_email' });
+  await users.createIndex({ username: 1 }, { name: 'idx_user_username' });
   await users.createIndex({ classRoom: 1 }, { name: 'idx_user_class_room' });
 
   await requests.createIndex({ id: 1 }, { unique: true, name: 'idx_help_id' });
@@ -58,7 +67,8 @@ function sanitizeUserInput(payload) {
   const fullName = normalizeText(payload?.fullName);
   const classRoom = normalizeText(payload?.classRoom);
   const email = normalizeEmail(payload?.email);
-  return { fullName, classRoom, email };
+  const username = normalizeUsername(payload?.username);
+  return { fullName, classRoom, email, username };
 }
 
 function toPublicUser(user) {
@@ -68,6 +78,7 @@ function toPublicUser(user) {
     fullName: user.fullName,
     classRoom: user.classRoom,
     email: user.email,
+    username: user.username ?? '',
     mustChangePassword: Boolean(user.mustChangePassword),
     disabled: Boolean(user.disabled),
     createdAt: user.createdAt,
@@ -103,6 +114,18 @@ export async function getUserByEmail(email) {
   return found ? stripMongoId(found) : null;
 }
 
+export async function getUserByUsername(username) {
+  await ensureInitialized();
+  const users = await getCollection(USERS_COLLECTION);
+  const normalized = normalizeUsername(username);
+  if (!normalized) {
+    return null;
+  }
+
+  const found = await users.findOne({ username: normalized });
+  return found ? stripMongoId(found) : null;
+}
+
 export async function listUsers() {
   await ensureInitialized();
   const users = await getCollection(USERS_COLLECTION);
@@ -116,19 +139,34 @@ export async function createUserWithPassword(payload, password, options = {}) {
   const normalized = sanitizeUserInput(payload);
   const userKey = buildUserKey(normalized);
 
-  if (!normalized.fullName || !normalized.classRoom || !normalized.email) {
+  if (!normalized.fullName || !normalized.classRoom) {
     throw new Error('Invalid student details.');
+  }
+
+  if (!normalized.email && !normalized.username) {
+    throw new Error('Provide at least an email or a username.');
   }
 
   if (typeof password !== 'string' || password.length < 4) {
     throw new Error('Password must be at least 4 characters.');
   }
 
-  const existingEmail = await users.findOne({ email: normalized.email });
-  if (existingEmail) {
-    const error = new Error('A student account with this email already exists.');
-    error.code = 'EMAIL_ALREADY_EXISTS';
-    throw error;
+  if (normalized.email) {
+    const existingEmail = await users.findOne({ email: normalized.email });
+    if (existingEmail) {
+      const error = new Error('A student account with this email already exists.');
+      error.code = 'EMAIL_ALREADY_EXISTS';
+      throw error;
+    }
+  }
+
+  if (normalized.username) {
+    const existingUsername = await users.findOne({ username: normalized.username });
+    if (existingUsername) {
+      const error = new Error('A student account with this username already exists.');
+      error.code = 'USERNAME_ALREADY_EXISTS';
+      throw error;
+    }
   }
 
   const existingUserKey = await users.findOne({ userKey });
@@ -138,6 +176,13 @@ export async function createUserWithPassword(payload, password, options = {}) {
     throw error;
   }
 
+  if (!normalized.email) {
+    normalized.email = '';
+  }
+  if (!normalized.username) {
+    normalized.username = '';
+  }
+
   const now = Date.now();
   const user = {
     id: randomUUID(),
@@ -145,6 +190,7 @@ export async function createUserWithPassword(payload, password, options = {}) {
     fullName: normalized.fullName,
     classRoom: normalized.classRoom,
     email: normalized.email,
+    username: normalized.username,
     passwordHash: hashPasswordScrypt(password),
     mustChangePassword: Boolean(options.mustChangePassword),
     disabled: false,
@@ -214,6 +260,9 @@ export async function updateUser(userId, patch) {
   if (patch?.email !== undefined) {
     normalizedPatch.email = normalizeEmail(patch.email);
   }
+  if (patch?.username !== undefined) {
+    normalizedPatch.username = normalizeUsername(patch.username);
+  }
   if (patch?.disabled !== undefined) {
     normalizedPatch.disabled = Boolean(patch.disabled);
   }
@@ -226,7 +275,24 @@ export async function updateUser(userId, patch) {
     ...normalizedPatch,
     updatedAt: Date.now(),
   };
+  if (!nextUser.email && !nextUser.username) {
+    throw new Error('User must have at least an email or username.');
+  }
   nextUser.userKey = buildUserKey(nextUser);
+
+  if (normalizedPatch.email && normalizedPatch.email !== normalizedExisting.email) {
+    const existingEmailOwner = await users.findOne({ email: normalizedPatch.email });
+    if (existingEmailOwner && existingEmailOwner.id !== userId) {
+      throw new Error('Another user already has this email.');
+    }
+  }
+
+  if (normalizedPatch.username && normalizedPatch.username !== normalizedExisting.username) {
+    const existingUsernameOwner = await users.findOne({ username: normalizedPatch.username });
+    if (existingUsernameOwner && existingUsernameOwner.id !== userId) {
+      throw new Error('Another user already has this username.');
+    }
+  }
 
   await users.replaceOne({ id: userId }, nextUser);
   return nextUser;
@@ -243,6 +309,7 @@ export async function createPasswordAssistanceRequest(payload) {
     fullName: normalized.fullName,
     classRoom: normalized.classRoom,
     email: normalized.email,
+    username: normalized.username,
     message: normalizeText(payload?.message ?? '').slice(0, 500),
     status: 'open',
     createdAt: Date.now(),

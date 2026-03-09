@@ -4,9 +4,11 @@ React + Vite CBT frontend with an Express + MongoDB backend and an admin dashboa
 
 ## Current Auth Flow
 
-- Student registration: full name, class, email, password
-- Student login: email + password only
+- Student registration: full name, class, password, and at least one of email/username
+- Student login: email or username + password
 - Student token + admin token are persisted in MongoDB (survive server restarts)
+- Frontend auto-logs out when token/session expires
+- Student UI also auto-logs out after idle timeout on non-exam screens (default 3 minutes, configurable with `VITE_STUDENT_IDLE_TIMEOUT_MS`)
 
 ## Features
 

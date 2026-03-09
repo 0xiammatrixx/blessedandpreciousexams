@@ -560,6 +560,26 @@ function AdminPage() {
   }, []);
 
   useEffect(() => {
+    if (!token || !Number.isFinite(tokenExpiresAt) || tokenExpiresAt <= 0) {
+      return undefined;
+    }
+
+    const timeoutMs = tokenExpiresAt - Date.now();
+    if (timeoutMs <= 0) {
+      clearAuth();
+      setErrorMessage('Your admin session timed out. Please login again.');
+      return undefined;
+    }
+
+    const timeoutId = setTimeout(() => {
+      clearAuth();
+      setErrorMessage('Your admin session timed out. Please login again.');
+    }, timeoutMs);
+
+    return () => clearTimeout(timeoutId);
+  }, [clearAuth, token, tokenExpiresAt]);
+
+  useEffect(() => {
     if (!token) {
       return;
     }
@@ -1436,11 +1456,15 @@ function AdminPage() {
       if (email === null) {
         return;
       }
+      const username = window.prompt('Username', user.username ?? '');
+      if (username === null) {
+        return;
+      }
 
       setErrorMessage('');
       updateLoading('users', true);
       try {
-        await updateAdminUser(token, user.id, { fullName, classRoom, email });
+        await updateAdminUser(token, user.id, { fullName, classRoom, email, username });
         await loadUsers(token, userFilters);
         setInfoMessage('User details updated.');
       } catch (error) {
@@ -2143,7 +2167,7 @@ function AdminPage() {
                 <th>Trial</th>
                 <th>Name</th>
                 <th>Class</th>
-                <th>Email</th>
+                <th>Contact</th>
                 <th>Status</th>
                 <th>Final %</th>
                 <th>Violations</th>
@@ -2361,7 +2385,7 @@ function AdminPage() {
         <div className="admin-filters">
           <input
             type="search"
-            placeholder="Search by name or email"
+            placeholder="Search by name, email or username"
             value={userFilters.search}
             onChange={(event) =>
               setUserFilters((previous) => ({ ...previous, search: event.target.value }))
@@ -2401,7 +2425,7 @@ function AdminPage() {
               <tr>
                 <th>Name</th>
                 <th>Class</th>
-                <th>Email</th>
+                <th>Contact</th>
                 <th>Trials</th>
                 <th>Best %</th>
                 <th>Last Login</th>
@@ -2418,8 +2442,8 @@ function AdminPage() {
                     <span className="truncate-line">{user.fullName}</span>
                   </td>
                   <td>{user.classRoom}</td>
-                  <td title={user.email}>
-                    <span className="truncate-line">{user.email}</span>
+                  <td title={user.email || (user.username ? `@${user.username}` : '-')}>
+                    <span className="truncate-line">{user.email || (user.username ? `@${user.username}` : '-')}</span>
                   </td>
                   <td>{user.totalTrials ?? 0}</td>
                   <td>{user.bestFinalPercent ?? 0}%</td>
@@ -2537,7 +2561,7 @@ function AdminPage() {
               <tr>
                 <th>Student</th>
                 <th>Class</th>
-                <th>Email</th>
+                <th>Contact</th>
                 <th>Message</th>
                 <th>Status</th>
                 <th>Created</th>
@@ -2552,8 +2576,10 @@ function AdminPage() {
                     <span className="truncate-line">{request.fullName}</span>
                   </td>
                   <td>{request.classRoom}</td>
-                  <td title={request.email}>
-                    <span className="truncate-line">{request.email}</span>
+                  <td title={request.email || (request.username ? `@${request.username}` : '-')}>
+                    <span className="truncate-line">
+                      {request.email || (request.username ? `@${request.username}` : '-')}
+                    </span>
                   </td>
                   <td title={request.message}>
                     <span className="truncate-2">{request.message || '-'}</span>

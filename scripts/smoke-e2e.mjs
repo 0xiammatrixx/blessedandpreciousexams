@@ -367,18 +367,19 @@ async function main() {
     const fullName = `Smoke Student ${timestamp}`;
     const classRoom = 'JSS1 A';
     const email = `smoke.${timestamp}@example.com`;
+    const username = `smoke_user_${timestamp}`;
     const password = `Sm0ke!${timestamp}`;
 
     const registerPayload = await requestJson(baseUrl, '/api/student/register', {
       method: 'POST',
-      json: { fullName, classRoom, email, password },
+      json: { fullName, classRoom, email, username, password },
     });
     assert(typeof registerPayload.token === 'string' && registerPayload.token.length > 10, 'Register token missing.');
     printStep('Student registration passed');
 
     const loginPayload = await requestJson(baseUrl, '/api/student/login', {
       method: 'POST',
-      json: { email, password },
+      json: { identifier: username, password },
     });
     assert(typeof loginPayload.token === 'string' && loginPayload.token.length > 10, 'Login token missing.');
     printStep('Student login passed');
@@ -401,13 +402,13 @@ async function main() {
       'invalid password',
       {
         method: 'POST',
-        json: { email, password },
+        json: { identifier: username, password },
       }
     );
 
     const reloginPayload = await requestJson(baseUrl, '/api/student/login', {
       method: 'POST',
-      json: { email, password: newPassword },
+      json: { identifier: username, password: newPassword },
     });
     assert(
       typeof reloginPayload.token === 'string' && reloginPayload.token.length > 10,
@@ -590,8 +591,8 @@ async function main() {
     assert(adminReportCard.body.includes(started.sessionId), 'Admin report card should include session ID.');
     printStep('Admin branding + report card endpoints passed');
 
-    const usersPayload = await adminApi.fetchUsers({ search: email });
-    const matchedUser = (usersPayload?.users ?? []).find((row) => row.email === email);
+    const usersPayload = await adminApi.fetchUsers({ search: username });
+    const matchedUser = (usersPayload?.users ?? []).find((row) => row.username === username || row.email === email);
     assert(matchedUser?.id, 'Admin users list did not include smoke student.');
 
     const adminResetPassword = `${newPassword}x`;
@@ -613,13 +614,13 @@ async function main() {
       'invalid password',
       {
         method: 'POST',
-        json: { email, password: newPassword },
+        json: { identifier: username, password: newPassword },
       }
     );
 
     const postResetLogin = await requestJson(baseUrl, '/api/student/login', {
       method: 'POST',
-      json: { email, password: adminResetPassword },
+      json: { identifier: username, password: adminResetPassword },
     });
     assert(postResetLogin?.user?.mustChangePassword === true, 'Post-reset login should require password change.');
     printStep('Admin password reset flow passed');
