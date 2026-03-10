@@ -1318,7 +1318,7 @@ function StudentExamApp() {
       return (
         <main className="center-screen">
           <div className="card-panel wide">
-            <h1>Blessed and Precious Academy CBT</h1>
+            <h1>Blessed and Academy CBT</h1>
             <p className="muted">Login with email/username and password, or register a new student account.</p>
 
             <div className="inline-actions">
@@ -1383,9 +1383,9 @@ function StudentExamApp() {
                   onChange={(event) => setRegisterForm((prev) => ({ ...prev, classRoom: event.target.value }))}
                 >
                   <option value="">Select class</option>
-                  {meta?.classOptions?.map((classOptions) => (
-                    <option key={classOptions} value={classOptions}>
-                      {classOptions}
+                  {meta?.classOptions?.map((classOption) => (
+                    <option key={classOption} value={classOption}>
+                      {classOption}
                     </option>
                   ))}
                 </select>
