@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: Salem Exams API
+  title: blessedandprecious Exams API
   version: 1.0.0
   description: Core API surface for student auth/exam flow and admin controls.
 servers:

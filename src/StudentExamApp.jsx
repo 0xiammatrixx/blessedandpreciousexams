@@ -21,10 +21,10 @@ import {
   submitExam,
 } from './api';
 
-const ACTIVE_SESSION_KEY = 'salem_exam_active_session';
-const ACTIVE_INDEX_KEY = 'salem_exam_active_index';
-const STUDENT_TOKEN_KEY = 'salem_student_token';
-const STUDENT_TOKEN_EXPIRES_KEY = 'salem_student_token_expires_at';
+const ACTIVE_SESSION_KEY = 'blessedandprecious_exam_active_session';
+const ACTIVE_INDEX_KEY = 'blessedandprecious_exam_active_index';
+const STUDENT_TOKEN_KEY = 'blessedandprecious_student_token';
+const STUDENT_TOKEN_EXPIRES_KEY = 'blessedandprecious_student_token_expires_at';
 const STUDENT_IDLE_TIMEOUT_MS_INPUT = Number(import.meta.env.VITE_STUDENT_IDLE_TIMEOUT_MS ?? 3 * 60 * 1000);
 const STUDENT_IDLE_TIMEOUT_MS =
   Number.isFinite(STUDENT_IDLE_TIMEOUT_MS_INPUT) && STUDENT_IDLE_TIMEOUT_MS_INPUT >= 30_000
@@ -1292,7 +1292,7 @@ function StudentExamApp() {
     return (
       <main className="center-screen">
         <div className="card-panel">
-          <h1>Salem Academy CBT</h1>
+          <h1>blessedandprecious Academy CBT</h1>
           <p>Loading exam setup...</p>
         </div>
       </main>
@@ -1318,7 +1318,7 @@ function StudentExamApp() {
       return (
         <main className="center-screen">
           <div className="card-panel wide">
-            <h1>Salem Academy CBT</h1>
+            <h1>Blessed and Precious Academy CBT</h1>
             <p className="muted">Login with email/username and password, or register a new student account.</p>
 
             <div className="inline-actions">
@@ -2165,7 +2165,7 @@ function StudentExamApp() {
 
       <header className="exam-header">
         <div>
-          <h1>Salem Academy CBT</h1>
+          <h1>blessedandprecious Academy CBT</h1>
           <p>
             {session?.student.fullName} | {session?.student.classRoom}
           </p>

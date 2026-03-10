@@ -616,7 +616,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const localEnv = loadLocalEnv();
   const mongoUri = process.env.MONGO_URI ?? localEnv.MONGO_URI ?? '';
-  const dbName = process.env.MONGO_DB_NAME ?? localEnv.MONGO_DB_NAME ?? 'salemexams';
+  const dbName = process.env.MONGO_DB_NAME ?? localEnv.MONGO_DB_NAME ?? 'blessedandpreciousexams';
   const mongoDnsServers = process.env.MONGO_DNS_SERVERS ?? localEnv.MONGO_DNS_SERVERS ?? '';
   const resultDelayMsInput = Number(process.env.RESULT_RELEASE_DELAY_MS ?? localEnv.RESULT_RELEASE_DELAY_MS);
   const resultDelayMs =

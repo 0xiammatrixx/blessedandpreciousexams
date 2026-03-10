@@ -1441,7 +1441,7 @@ function buildReportCardPayload(session, branding, includeCorrectAnswers = false
 
   return {
     branding: {
-      schoolName: normalizeName(branding?.schoolName) || 'Salem Academy',
+      schoolName: normalizeName(branding?.schoolName) || 'blessedandprecious Academy',
       logoUrl: normalizeName(branding?.logoUrl) || '/favicon.svg',
     },
     student: {
@@ -1820,7 +1820,7 @@ function startKeepAliveLoop() {
         method: 'GET',
         headers: {
           'Cache-Control': 'no-cache',
-          'User-Agent': 'salemexams-keepalive/1.0',
+          'User-Agent': 'blessedandpreciousexams-keepalive/1.0',
         },
       });
 
@@ -3662,7 +3662,7 @@ if (existsSync(distPath)) {
 }
 
 app.listen(PORT, () => {
-  console.log(`Salem Exam API running on http://localhost:${PORT}`);
+  console.log(`blessedandprecious Exam API running on http://localhost:${PORT}`);
   if (!parsedAdminPasscodeHash) {
     console.warn('ADMIN_PASSCODE_HASH is not configured. Admin login is disabled until it is set.');
   }

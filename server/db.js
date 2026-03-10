@@ -2,7 +2,7 @@ import dns from 'node:dns';
 import { MongoClient } from 'mongodb';
 
 const MONGO_URI = String(process.env.MONGO_URI ?? '').trim();
-const MONGO_DB_NAME = String(process.env.MONGO_DB_NAME ?? 'salemexams').trim();
+const MONGO_DB_NAME = String(process.env.MONGO_DB_NAME ?? 'blessedandpreciousexams').trim();
 const MONGO_DNS_SERVERS = String(process.env.MONGO_DNS_SERVERS ?? '').trim();
 
 let client = null;

@@ -27,9 +27,9 @@ import {
   waiveAdminSessionViolations,
 } from './api';
 
-const ADMIN_TOKEN_KEY = 'salem_admin_token';
-const ADMIN_TOKEN_EXPIRES_KEY = 'salem_admin_token_expires_at';
-const ADMIN_WIDGETS_KEY = 'salem_admin_widgets';
+const ADMIN_TOKEN_KEY = 'blessedandprecious_admin_token';
+const ADMIN_TOKEN_EXPIRES_KEY = 'blessedandprecious_admin_token_expires_at';
+const ADMIN_WIDGETS_KEY = 'blessedandprecious_admin_widgets';
 
 const TOPIC_OPTIONS = ['basics', 'internet', 'web', 'coding', 'navigation', 'vscode', 'general'];
 
@@ -152,7 +152,7 @@ const EMPTY_EXAM_QUESTION_FORM = {
 };
 
 const DEFAULT_BRANDING_FORM = {
-  schoolName: 'Salem Academy',
+  schoolName: 'blessedandprecious Academy',
   logoUrl: '',
 };
 
@@ -1613,7 +1613,7 @@ function AdminPage() {
 
       <header className="admin-header">
         <div>
-          <h1>Salem Exam Admin</h1>
+          <h1>blessedandprecious Exam Admin</h1>
           <p>
             Session expires: <strong>{formatDate(tokenExpiresAt)}</strong>
           </p>
@@ -1691,7 +1691,7 @@ function AdminPage() {
             onChange={(event) =>
               setBrandingForm((previous) => ({ ...previous, schoolName: event.target.value }))
             }
-            placeholder="Salem Academy"
+            placeholder="blessedandprecious Academy"
           />
 
           <label htmlFor="brandingLogoUrl">School Logo URL (Optional)</label>

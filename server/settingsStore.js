@@ -9,7 +9,7 @@ function normalizeText(value) {
 }
 
 function toBrandingSettings(input = {}) {
-  const schoolName = normalizeText(input.schoolName) || 'Salem Academy';
+  const schoolName = normalizeText(input.schoolName) || 'blessedandprecious Academy';
   const logoUrl = normalizeText(input.logoUrl);
 
   return {

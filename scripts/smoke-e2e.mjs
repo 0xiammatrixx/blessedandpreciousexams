@@ -299,7 +299,7 @@ function buildAdminApi(baseUrl, token) {
 async function main() {
   const envFile = loadEnvFile();
   const mongoUri = process.env.MONGO_URI ?? envFile.MONGO_URI ?? '';
-  const baseDbName = process.env.MONGO_DB_NAME ?? envFile.MONGO_DB_NAME ?? 'salemexams';
+  const baseDbName = process.env.MONGO_DB_NAME ?? envFile.MONGO_DB_NAME ?? 'blessedandpreciousexams';
   const mongoDnsServers = process.env.MONGO_DNS_SERVERS ?? envFile.MONGO_DNS_SERVERS ?? '';
 
   assert(mongoUri, 'MONGO_URI is required for smoke test.');
