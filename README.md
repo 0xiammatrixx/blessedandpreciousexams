@@ -1,4 +1,4 @@
-# Salem Academy CBT Exam App
+# blessedandprecious Academy CBT Exam App
 
 React + Vite CBT frontend with an Express + MongoDB backend and an admin dashboard.
 
