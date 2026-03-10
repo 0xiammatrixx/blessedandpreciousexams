@@ -529,6 +529,7 @@ export const DEFAULT_QUESTION_BANK = [
       { id: 'A', text: 'False' },
       { id: 'B', text: 'True' },
       { id: 'C', text: 'This one is too hard' },
+      { id: 'D', text: 'It is both true and false' },
     ],
     correctOptionIds: ['A'],
   },
