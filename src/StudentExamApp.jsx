@@ -1383,9 +1383,9 @@ function StudentExamApp() {
                   onChange={(event) => setRegisterForm((prev) => ({ ...prev, classRoom: event.target.value }))}
                 >
                   <option value="">Select class</option>
-                  {meta?.classOptions?.map((classOption) => (
-                    <option key={classOption} value={classOption}>
-                      {classOption}
+                  {meta?.classOptions?.map((classOptions) => (
+                    <option key={classOptions} value={classOptions}>
+                      {classOptions}
                     </option>
                   ))}
                 </select>
